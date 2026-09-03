@@ -24,11 +24,6 @@
     "web": {
       "favicon": "./assets/logo.png",
       "bundler": "metro"
-    },
-    "extra": {
-      "eas": {
-        "projectId": "47f125a8-cdee-45a2-87f1-e8d02341d3b6"
-      }
     }
   }
 }
