@@ -87,6 +87,10 @@ export const LoginScreen: React.FC = () => {
             style={styles.brandLogoImage}
             resizeMode="contain"
           />
+          <Text style={styles.brandTitleText}>
+            <Text style={styles.brandTitleDark}>LERN</Text>
+            <Text style={styles.brandTitleAccent}>EX</Text>
+          </Text>
           <Text style={styles.brandTagline}>CONNECT • PRACTICE • MASTER</Text>
         </View>
 
@@ -196,9 +200,23 @@ const styles = StyleSheet.create({
     marginBottom: spacing.base,
   },
   brandLogoImage: {
-    width: 220,
-    height: 155,
+    width: 90,
+    height: 90,
+    marginBottom: 6,
+  },
+  brandTitleText: {
+    fontSize: 26,
+    fontWeight: '900',
+    letterSpacing: 2.5,
     marginBottom: 2,
+  },
+  brandTitleDark: {
+    color: '#0F172A',
+    fontWeight: '900',
+  },
+  brandTitleAccent: {
+    color: '#EC4899',
+    fontWeight: '900',
   },
   brandTagline: {
     fontSize: 10,
