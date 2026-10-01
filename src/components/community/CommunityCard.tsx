@@ -1,7 +1,8 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Community } from '../../types';
+import { Avatar } from '../common/Avatar';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 
 interface CommunityCardProps {
@@ -39,7 +40,15 @@ export const CommunityCard: React.FC<CommunityCardProps> = ({
               </View>
             )}
           </View>
-          <Text style={styles.memberText}>{community.memberCount} active learners & mentors</Text>
+          <Text style={styles.memberText}>
+            {community.memberCount === 0
+              ? 'Be the first to join'
+              : `${community.memberCount} member${community.memberCount === 1 ? '' : 's'}${
+                  community.mentorCount > 0
+                    ? ` • ${community.mentorCount} mentor${community.mentorCount === 1 ? '' : 's'}`
+                    : ''
+                }`}
+          </Text>
         </View>
 
         <TouchableOpacity
@@ -80,16 +89,16 @@ export const CommunityCard: React.FC<CommunityCardProps> = ({
           ))}
         </View>
 
-        {/* Overlapping Avatar Stack */}
-        <View style={styles.avatarStack}>
-          {community.avatarStack?.map((uri, idx) => (
-            <Image
-              key={idx}
-              source={{ uri }}
-              style={[styles.stackAvatar, { left: idx * 14 }]}
-            />
-          ))}
-        </View>
+        {/* Real member avatars (initials) — only actual joined users */}
+        {community.members.length > 0 && (
+          <View style={styles.avatarStack}>
+            {community.members.slice(0, 3).map((m, idx) => (
+              <View key={m.id} style={[styles.stackAvatarWrap, { left: idx * 14 }]}>
+                <Avatar name={m.name} size={22} />
+              </View>
+            ))}
+          </View>
+        )}
       </View>
     </View>
   );
@@ -213,12 +222,11 @@ const styles = StyleSheet.create({
     width: 60,
     height: 24,
   },
-  stackAvatar: {
+  stackAvatarWrap: {
     position: 'absolute',
-    width: 22,
-    height: 22,
     borderRadius: 11,
     borderWidth: 1.5,
     borderColor: '#FFFFFF',
+    overflow: 'hidden',
   },
 });

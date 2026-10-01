@@ -7,7 +7,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
-  Alert,
   Image,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -25,7 +24,7 @@ type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'Login'>;
 export const LoginScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NavigationProp>();
-  const { login } = useApp();
+  const { login, showDialog } = useApp();
 
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -45,24 +44,33 @@ export const LoginScreen: React.FC = () => {
     return Object.keys(errs).length === 0;
   };
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     if (!validate()) return;
     setLoading(true);
-    setTimeout(() => {
+    try {
+      await login(identifier, password);
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'Main', params: { screen: 'HomeTab' } }],
+      });
+    } catch (err: any) {
+      const status = err?.status;
+      const message =
+        status === 401
+          ? 'The email/phone or password is incorrect. Please try again.'
+          : status === 429
+          ? 'Too many attempts. Please wait a minute and try again.'
+          : err?.message ||
+            'Unable to sign in right now. Check your connection and try again.';
+      showDialog({
+        title: 'Login Failed',
+        message,
+        icon: status === 401 ? 'lock-closed-outline' : 'alert-circle-outline',
+        confirmText: 'Try Again',
+      });
+    } finally {
       setLoading(false);
-      const success = login(identifier, password);
-      if (success) {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'Main', params: { screen: 'HomeTab' } }],
-        });
-      } else {
-        Alert.alert(
-          'Login Failed',
-          'We couldn’t find an account matching those credentials. Please check your details or create a new account below.'
-        );
-      }
-    }, 450);
+    }
   };
 
   return (
@@ -141,12 +149,7 @@ export const LoginScreen: React.FC = () => {
 
               <TouchableOpacity
                 activeOpacity={0.7}
-                onPress={() =>
-                  Alert.alert(
-                    'Reset Password',
-                    'A password reset verification link will be sent to your registered email address.'
-                  )
-                }
+                onPress={() => navigation.navigate('ForgotPassword')}
               >
                 <Text style={styles.forgotPasswordText}>Forgot password?</Text>
               </TouchableOpacity>
@@ -184,7 +187,7 @@ export const LoginScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#FFFFFF',
   },
   scrollContent: {
     paddingHorizontal: spacing.xl,

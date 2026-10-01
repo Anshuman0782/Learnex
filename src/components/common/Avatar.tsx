@@ -32,11 +32,16 @@ export const Avatar: React.FC<AvatarProps> = ({
   const imageSize = showRing ? size - 6 : size;
   const radius = size / 2;
 
+  // If the remote image fails to load, fall back to initials instead of a blank.
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => setFailed(false), [uri]);
+
   const renderContent = () => {
-    if (uri) {
+    if (uri && !failed) {
       return (
         <Image
           source={{ uri }}
+          onError={() => setFailed(true)}
           style={[
             styles.image,
             { width: imageSize, height: imageSize, borderRadius: imageSize / 2 },

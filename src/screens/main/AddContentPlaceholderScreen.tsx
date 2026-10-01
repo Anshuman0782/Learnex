@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,50 +7,39 @@ import {
   TouchableOpacity,
   TextInput,
   Image,
-  Alert,
   Switch,
+  Modal,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import {
+  useAudioRecorder,
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+} from 'expo-audio';
 import { useApp } from '../../context/AppContext';
+import {
+  recordVideo,
+  pickVideo,
+  recordShort,
+  pickAudioFile,
+  pickPhoto,
+  pickPostPhotos,
+  capturePostPhoto,
+  MAX_POST_PHOTOS,
+  type PickedPhoto,
+  generateVideoThumbnail,
+  type MediaResult,
+} from '../../services/imagePicker';
+import { uploadFileRequest } from '../../api/media.api';
+import * as FileSystem from 'expo-file-system/legacy';
+import { POST_BACKGROUNDS, postBackground, type PostBgKey } from '../../config/postBackgrounds';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
-
-const SAMPLE_CLIPS = [
-  {
-    id: 'clip-1',
-    title: 'Adele - Easy On Me (Chorus Take)',
-    duration: '0:48',
-    thumbnail: 'https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=600&auto=format&fit=crop&q=80',
-    category: 'Vocal',
-    tag: '#VocalCritique',
-  },
-  {
-    id: 'clip-2',
-    title: 'Guitar Solo Speed Run (120 BPM)',
-    duration: '0:35',
-    thumbnail: 'https://images.unsplash.com/photo-1510915361894-db8b60106cb1?w=600&auto=format&fit=crop&q=80',
-    category: 'Guitar',
-    tag: '#GuitarSolo',
-  },
-  {
-    id: 'clip-3',
-    title: 'Beat Mixing & Sidechain Compression',
-    duration: '1:10',
-    thumbnail: 'https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=600&auto=format&fit=crop&q=80',
-    category: 'Production',
-    tag: '#MixingCritique',
-  },
-  {
-    id: 'clip-4',
-    title: 'React Native Micro-Interactions',
-    duration: '0:50',
-    thumbnail: 'https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=600&auto=format&fit=crop&q=80',
-    category: 'Coding',
-    tag: '#CodeReview',
-  },
-];
 
 const QUICK_TAGS = [
   { label: '#VocalPitch', icon: 'mic' },
@@ -61,19 +50,124 @@ const QUICK_TAGS = [
   { label: '#SpeedTechnique', icon: 'flash' },
 ];
 
-const WAVEFORM_HEIGHTS = [8, 16, 24, 18, 30, 14, 26, 32, 20, 15, 28, 34, 22, 12, 26, 18, 10];
+/** A locally-selected media file, before upload. */
+type SelectedMedia = {
+  kind: 'video' | 'audio';
+  uri: string;
+  mimeType: string;
+  durationMs?: number;
+};
+
+const fmtDuration = (ms?: number): string => {
+  if (!ms || ms <= 0) return '';
+  const total = Math.round(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+};
 
 export const AddContentPlaceholderScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
-  const { createPost, getJoinedCommunityObjects, joinedCommunities, showDialog } = useApp();
+  const {
+    createPost,
+    getJoinedCommunityObjects,
+    joinedCommunities,
+    showDialog,
+    saveUserGoal,
+    logGoalSession,
+    activeGoal,
+  } = useApp();
 
   const joinedCommunityObjects = getJoinedCommunityObjects();
 
-  const [contentType, setContentType] = useState<'video' | 'text'>('video');
+  // Content type: 'goal' | 'video' | 'short' | 'text'
+  // NOTE: the Goal option is temporarily hidden (see the format selector below);
+  // default is 'video'. Goal code is kept but not shown for now.
+  const [contentType, setContentType] = useState<'goal' | 'video' | 'short' | 'text'>('video');
+  const isShort = contentType === 'short';
+
+  // Video & Discussion states
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [bgKey, setBgKey] = useState<PostBgKey>('default');
   const [isPrivate, setIsPrivate] = useState(false);
+  const [scheduleMode, setScheduleMode] = useState(false);
+  const [scheduledAt, setScheduledAt] = useState<Date | null>(null);
+
+  // Custom (dynamic) schedule date & time picker — any date/time the user wants.
+  const [showSchedulePicker, setShowSchedulePicker] = useState(false);
+  const nowPlus1h = new Date(Date.now() + 60 * 60 * 1000);
+  const [schedYear, setSchedYear] = useState(nowPlus1h.getFullYear());
+  const [schedMonth, setSchedMonth] = useState(nowPlus1h.getMonth()); // 0-11
+  const [schedDay, setSchedDay] = useState(nowPlus1h.getDate());
+  const [schedHour, setSchedHour] = useState(nowPlus1h.getHours()); // 0-23
+  const [schedMinute, setSchedMinute] = useState(0);
+
+  const SCHED_MONTH_NAMES = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  const daysInSchedMonth = new Date(schedYear, schedMonth + 1, 0).getDate();
+  const openSchedulePicker = () => {
+    const base = scheduledAt ?? new Date(Date.now() + 60 * 60 * 1000);
+    setSchedYear(base.getFullYear());
+    setSchedMonth(base.getMonth());
+    setSchedDay(base.getDate());
+    setSchedHour(base.getHours());
+    setSchedMinute(base.getMinutes() - (base.getMinutes() % 5));
+    setShowSchedulePicker(true);
+  };
+  const applySchedulePicker = () => {
+    const picked = new Date(schedYear, schedMonth, schedDay, schedHour, schedMinute, 0, 0);
+    if (picked.getTime() <= Date.now()) {
+      Alert.alert('Pick a future time', 'The scheduled time must be later than now.');
+      return;
+    }
+    setScheduledAt(picked);
+    setScheduleMode(true);
+    setShowSchedulePicker(false);
+  };
+
+  const SCHEDULE_PRESETS: { label: string; getDate: () => Date }[] = [
+    { label: 'In 1 hour', getDate: () => new Date(Date.now() + 60 * 60 * 1000) },
+    { label: 'In 3 hours', getDate: () => new Date(Date.now() + 3 * 60 * 60 * 1000) },
+    {
+      label: 'Tonight 8 PM',
+      getDate: () => {
+        const d = new Date();
+        d.setHours(20, 0, 0, 0);
+        if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1);
+        return d;
+      },
+    },
+    {
+      label: 'Tomorrow 9 AM',
+      getDate: () => {
+        const d = new Date();
+        d.setDate(d.getDate() + 1);
+        d.setHours(9, 0, 0, 0);
+        return d;
+      },
+    },
+  ];
+  const [customFocusArea, setCustomFocusArea] = useState('');
+
+  // Goal Set states
+  const [goalTitle, setGoalTitle] = useState('');
+  const [targetSessions, setTargetSessions] = useState<number>(5);
+  const [isCustomSessions, setIsCustomSessions] = useState(false);
+  const [customSessionsText, setCustomSessionsText] = useState('5');
+
+  const [targetHours, setTargetHours] = useState<number>(4.0);
+  const [isCustomHours, setIsCustomHours] = useState(false);
+  const [customHoursText, setCustomHoursText] = useState('4.0');
+
+  const [targetDate, setTargetDate] = useState('September 30, 2026');
+  const [showGoalDatePickerModal, setShowGoalDatePickerModal] = useState(false);
+  const [goalYear, setGoalYear] = useState('2026');
+  const [goalMonth, setGoalMonth] = useState('09');
+  const [goalDay, setGoalDay] = useState('30');
+
+  const [dailyReminders, setDailyReminders] = useState(true);
 
   const [selectedCommunityIds, setSelectedCommunityIds] = useState<string[]>(() => {
     if (joinedCommunities && joinedCommunities.length > 0) {
@@ -82,12 +176,45 @@ export const AddContentPlaceholderScreen: React.FC = () => {
     return joinedCommunityObjects.length > 0 ? [joinedCommunityObjects[0].id] : [];
   });
 
+  // Opened from inside a circle: pre-select that circle on the Post tab.
+  const route = useRoute<any>();
+  const presetCircleId: string | undefined = route.params?.circleId;
+  useEffect(() => {
+    if (!presetCircleId) return;
+    setContentType('video');
+    setSelectedCommunityIds([presetCircleId]);
+    navigation.setParams({ circleId: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetCircleId]);
+
   const [selectedTags, setSelectedTags] = useState<string[]>(['#VocalPitch']);
-  const [requestMentorCritique, setRequestMentorCritique] = useState(true);
-  const [selectedClipIndex, setSelectedClipIndex] = useState(0);
   const [isPublishing, setIsPublishing] = useState(false);
 
-  const currentClip = SAMPLE_CLIPS[selectedClipIndex];
+  // --- Real media capture state ---
+  const [media, setMedia] = useState<SelectedMedia | null>(null);
+  const [thumbUri, setThumbUri] = useState<string | null>(null); // local thumbnail image
+  const [busyPicking, setBusyPicking] = useState(false);
+  // Photo post: 1–5 photos (mutually exclusive with video/audio media).
+  const [photos, setPhotos] = useState<PickedPhoto[]>([]);
+
+  // Audio recording (expo-audio)
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  const recordTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Reset selected media whenever the format tab changes.
+  useEffect(() => {
+    setMedia(null);
+    setThumbUri(null);
+    setPhotos([]);
+  }, [contentType]);
+
+  useEffect(() => {
+    return () => {
+      if (recordTimer.current) clearInterval(recordTimer.current);
+    };
+  }, []);
 
   const handleToggleCommunity = (commId: string) => {
     setSelectedCommunityIds((prev) =>
@@ -101,40 +228,214 @@ export const AddContentPlaceholderScreen: React.FC = () => {
     );
   };
 
-  const handleQuickAction = (actionName: string) => {
+  const handleMediaResult = async (res: MediaResult, kind: 'video' | 'audio') => {
+    if (res.status === 'denied') {
+      Alert.alert('Access Needed', 'Please allow camera / microphone / storage access for LERNEX in your device settings.');
+      return;
+    }
+    if (res.status === 'error') {
+      Alert.alert('Could not use this file', res.message);
+      return;
+    }
+    if (res.status !== 'ok') return;
+
+    // Shorts must be under 60 seconds.
+    if (isShort && res.durationMs && res.durationMs > 60_000) {
+      Alert.alert('Too long for a Short', 'Shorts must be under 60 seconds. Please pick a shorter clip.');
+      return;
+    }
+
+    setMedia({ kind, uri: res.uri, mimeType: res.mimeType, durationMs: res.durationMs });
+    setPhotos([]);
+
+    // Auto-generate a poster for a regular video (not for shorts — those have none).
+    if (kind === 'video' && !isShort) {
+      const thumb = await generateVideoThumbnail(res.uri);
+      setThumbUri(thumb);
+    } else {
+      setThumbUri(null);
+    }
+  };
+
+  const handleRecordVideo = async () => {
+    setBusyPicking(true);
+    try {
+      const res = isShort ? await recordShort() : await recordVideo();
+      await handleMediaResult(res, 'video');
+    } finally {
+      setBusyPicking(false);
+    }
+  };
+
+  const handlePickVideo = async () => {
+    setBusyPicking(true);
+    try {
+      await handleMediaResult(await pickVideo(), 'video');
+    } finally {
+      setBusyPicking(false);
+    }
+  };
+
+  const handleUploadAudio = async () => {
+    setBusyPicking(true);
+    try {
+      await handleMediaResult(await pickAudioFile(), 'audio');
+    } finally {
+      setBusyPicking(false);
+    }
+  };
+
+  const handleToggleVoiceRecording = async () => {
+    if (isRecording) {
+      // Stop recording.
+      try {
+        await audioRecorder.stop();
+      } catch {
+        /* ignore */
+      }
+      if (recordTimer.current) clearInterval(recordTimer.current);
+      setIsRecording(false);
+      const uri = audioRecorder.uri;
+      if (uri) {
+        if (isShort && recordSeconds > 60) {
+          Alert.alert('Too long for a Short', 'Audio shorts must be under 60 seconds.');
+          setRecordSeconds(0);
+          return;
+        }
+        setMedia({ kind: 'audio', uri, mimeType: 'audio/m4a', durationMs: recordSeconds * 1000 });
+        setThumbUri(null);
+        setPhotos([]);
+      }
+      return;
+    }
+
+    // Start recording.
+    const perm = await AudioModule.requestRecordingPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert('Microphone Needed', 'Please allow microphone access for LERNEX to record a voice take.');
+      return;
+    }
+    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+    await audioRecorder.prepareToRecordAsync();
+    audioRecorder.record();
+    setRecordSeconds(0);
+    setIsRecording(true);
+    recordTimer.current = setInterval(() => {
+      setRecordSeconds((s) => {
+        const next = s + 1;
+        // Auto-stop an audio short at 60s.
+        if (isShort && next >= 60) {
+          void handleToggleVoiceRecording();
+        }
+        return next;
+      });
+    }, 1000);
+  };
+
+  const handleSetThumbnail = async () => {
+    // Long video → 16:9 (YouTube-style, matches the feed); audio reel → 9:16; audio post → square.
+    const aspect: [number, number] = media?.kind === 'video' ? [16, 9] : isShort ? [9, 16] : [1, 1];
+    const res = await pickPhoto(aspect);
+    if (res.status === 'denied') {
+      Alert.alert('Access Needed', 'Please allow photo access to choose a thumbnail.');
+      return;
+    }
+    if (res.status === 'ok') setThumbUri(res.uri);
+  };
+
+  const handlePhotos = async (fromCamera: boolean) => {
+    const room = MAX_POST_PHOTOS - photos.length;
+    if (room <= 0) {
+      Alert.alert('Photo limit', `A post can have up to ${MAX_POST_PHOTOS} photos.`);
+      return;
+    }
+    setBusyPicking(true);
+    try {
+      const res = fromCamera ? await capturePostPhoto() : await pickPostPhotos(room);
+      if (res.status === 'denied') {
+        Alert.alert('Access Needed', 'Please allow camera / photo access for LERNEX in your device settings.');
+        return;
+      }
+      if (res.status !== 'ok') return;
+      setMedia(null);
+      setThumbUri(null);
+      setPhotos((prev) => [...prev, ...res.photos].slice(0, MAX_POST_PHOTOS));
+    } finally {
+      setBusyPicking(false);
+    }
+  };
+
+  const removePhoto = (uri: string) => setPhotos((prev) => prev.filter((p) => p.uri !== uri));
+
+  const clearMedia = () => {
+    setMedia(null);
+    setThumbUri(null);
+    setRecordSeconds(0);
+    setPhotos([]);
+  };
+
+  const handleSaveGoal = () => {
+    if (!goalTitle.trim()) {
+      showDialog({
+        title: 'Goal Required',
+        message: 'Please enter your practice goal objective.',
+        icon: 'alert-circle-outline',
+        confirmText: 'OK',
+      });
+      return;
+    }
+
+    saveUserGoal({
+      title: goalTitle.trim(),
+      targetSessions,
+      targetHours,
+      targetDate,
+      completedSessions: activeGoal?.title === goalTitle.trim() ? activeGoal.completedSessions : 1,
+      dailyReminders,
+    });
+
     showDialog({
-      title: actionName,
-      message: `Hardware simulator active: Switched to clip "${currentClip.title}"`,
-      icon: 'videocam-outline',
-      confirmText: 'OK',
+      title: 'Target Goal Active!',
+      message: `Your goal "${goalTitle.trim()}" (${targetSessions} sessions/wk) is now active and tracked directly in this section!`,
+      icon: 'checkmark-circle-outline',
+      confirmText: 'Awesome',
     });
   };
 
-  const handlePublish = () => {
-    if (!title.trim()) {
+  const handlePublish = async () => {
+    if (contentType === 'goal') {
+      handleSaveGoal();
+      return;
+    }
+
+    if (contentType === 'text' ? !description.trim() : !title.trim()) {
       showDialog({
-        title: 'Title Required',
-        message: 'Please enter a title for your clip.',
+        title: contentType === 'text' ? 'Write Something' : 'Title Required',
+        message: contentType === 'text' ? 'Please write your discussion.' : 'Please enter a title.',
         icon: 'alert-circle-outline',
         confirmText: 'OK',
       });
       return;
     }
 
-    if (!description.trim()) {
+    // Video / Short / Audio need a captured media file; Discussion is text-only.
+    if (contentType !== 'text' && !media && photos.length === 0) {
       showDialog({
-        title: 'Description Required',
-        message: 'Please add a brief note for feedback.',
-        icon: 'alert-circle-outline',
+        title: 'Add Your Media',
+        message: isShort
+          ? 'Record or pick a reel (video or voice) under 60 seconds.'
+          : 'Add photos, a video, or a voice / audio take.',
+        icon: 'cloud-upload-outline',
         confirmText: 'OK',
       });
       return;
     }
 
-    if (selectedCommunityIds.length === 0) {
+    // A regular (non-short) post needs a target community; shorts go to Reels.
+    if (!isShort && selectedCommunityIds.length === 0) {
       showDialog({
         title: 'Community Circle Required',
-        message: 'Please select a community circle to tag your practice take.',
+        message: 'Please select a community circle.',
         icon: 'alert-circle-outline',
         confirmText: 'OK',
       });
@@ -142,36 +443,120 @@ export const AddContentPlaceholderScreen: React.FC = () => {
     }
 
     setIsPublishing(true);
+    try {
+      let videoUrl: string | undefined;
+      let audioUrl: string | undefined;
+      let videoThumbnail: string | undefined;
 
-    setTimeout(() => {
-      createPost({
-        title: title.trim(),
-        content: description.trim(),
-        communityIds: selectedCommunityIds,
+      // Photo post: upload each photo (in order).
+      let imageUrls: string[] | undefined;
+      if (photos.length > 0) {
+        imageUrls = [];
+        for (const ph of photos) {
+          const up = await uploadFileRequest(ph.uri, ph.mimeType);
+          imageUrls.push(up.url);
+        }
+      }
+
+      // Upload the main media file.
+      if (media) {
+        const up = await uploadFileRequest(media.uri, media.mimeType);
+        if (media.kind === 'video') videoUrl = up.url;
+        else audioUrl = up.url;
+      }
+
+      // Upload the poster thumbnail (regular video always; audio optional; video-short none).
+      // Resilient: if the cached thumbnail went missing, regenerate it; and if the
+      // poster still can't be uploaded, publish without it rather than failing.
+      if (thumbUri && !(media?.kind === 'video' && isShort)) {
+        try {
+          let localThumb = thumbUri;
+          const info = await FileSystem.getInfoAsync(localThumb);
+          if (!info.exists && media?.kind === 'video') {
+            const regen = await generateVideoThumbnail(media.uri);
+            if (regen) localThumb = regen;
+          }
+          const mime = localThumb.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+          const upThumb = await uploadFileRequest(localThumb, mime);
+          videoThumbnail = upThumb.url;
+        } catch {
+          // Poster is optional — continue publishing without a custom thumbnail.
+          videoThumbnail = undefined;
+        }
+      }
+
+      const postType: 'video' | 'audio' | 'text' | 'image' =
+        contentType === 'text'
+          ? 'text'
+          : imageUrls && imageUrls.length > 0
+          ? 'image'
+          : media?.kind === 'audio'
+          ? 'audio'
+          : 'video';
+
+      const scheduledIso =
+        scheduleMode && scheduledAt && scheduledAt.getTime() > Date.now()
+          ? scheduledAt.toISOString()
+          : undefined;
+
+      // Discussions have no separate topic: the text IS the post.
+      const discussText = description.trim();
+      await createPost({
+        title: contentType === 'text' ? discussText.split('\n')[0].slice(0, 80) : title.trim(),
+        content: contentType === 'text' ? discussText : description.trim() || title.trim(),
+        bgStyle: contentType === 'text' ? bgKey : undefined,
+        communityIds: isShort ? selectedCommunityIds : selectedCommunityIds,
         communityId: selectedCommunityIds[0],
         tag: selectedTags.join(' ') || '#PracticeVideo',
         tags: selectedTags,
-        postType: contentType,
-        videoThumbnail: contentType === 'video' ? currentClip.thumbnail : undefined,
-        videoDuration: contentType === 'video' ? currentClip.duration : undefined,
-        isPrivate,
+        postType,
+        videoUrl,
+        audioUrl,
+        imageUrls,
+        videoThumbnail,
+        videoDuration: fmtDuration(media?.durationMs) || undefined,
+        isShort,
+        isPrivate: scheduleMode ? false : isPrivate,
+        scheduledAt: scheduledIso,
         focusArea: selectedTags.map((t) => t.replace('#', '')).join(', '),
       });
 
-      setIsPublishing(false);
       setTitle('');
       setDescription('');
+      setBgKey('default');
+      clearMedia();
+      setScheduleMode(false);
+      setScheduledAt(null);
 
       showDialog({
-        title: isPrivate ? 'Shared to Circle Only 🔒' : 'Public Video Shared! 🎉',
-        message: isPrivate
-          ? 'This practice video is strictly private to your selected community. It will NEVER be shown on the public Reels feed.'
-          : 'Your video is live in the community circle, on your profile, and in the public Reels feed!',
-        icon: isPrivate ? 'lock-closed-outline' : 'rocket-outline',
-        confirmText: 'View Feed',
-        onConfirm: () => navigation.navigate('HomeTab'),
+        title: scheduledIso
+          ? 'Scheduled ⏰'
+          : isShort
+          ? 'Reel Published! 🎬'
+          : isPrivate
+          ? 'Shared to Circle Only'
+          : 'Published Successfully!',
+        message: scheduledIso
+          ? `This will publish automatically on ${scheduledAt!.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.`
+          : isShort
+          ? 'Your reel is now live in the Reels feed.'
+          : isPrivate
+          ? 'This practice post is private to your selected community.'
+          : 'Your post is live in your community circle!',
+        icon: scheduledIso ? 'time-outline' : isShort ? 'play-circle-outline' : isPrivate ? 'lock-closed-outline' : 'checkmark-circle-outline',
+        confirmText: scheduledIso ? 'Done' : isShort ? 'View Reels' : 'View Feed',
+        onConfirm: () => navigation.navigate(isShort && !scheduledIso ? 'ReelsTab' : 'HomeTab'),
       });
-    }, 400);
+    } catch (err: any) {
+      showDialog({
+        title: 'Upload Failed',
+        message: err?.message || 'Could not publish. Please check your connection and try again.',
+        icon: 'alert-circle-outline',
+        confirmText: 'Try Again',
+      });
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
   return (
@@ -187,30 +572,12 @@ export const AddContentPlaceholderScreen: React.FC = () => {
         </TouchableOpacity>
 
         <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerTitle}>Creator Studio</Text>
-          <View style={styles.sparkBadge}>
-            <Ionicons name="sparkles" size={10} color="#6366F1" />
-          </View>
+          <Text style={styles.headerTitle}>Create Content</Text>
         </View>
 
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={handlePublish}
-          disabled={isPublishing}
-          style={styles.publishHeaderBtn}
-        >
-          <LinearGradient
-            colors={['#6366F1', '#7C3AED']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.publishHeaderGradient}
-          >
-            <Text style={styles.publishHeaderBtnText}>
-              {isPublishing ? '...' : 'Share'}
-            </Text>
-            <Ionicons name="arrow-up" size={12} color="#FFFFFF" />
-          </LinearGradient>
-        </TouchableOpacity>
+        {/* Header Share button removed — the bottom "Share Practice Content" button
+            is the single publish action. Spacer keeps the title centered. */}
+        <View style={{ width: 34 }} />
       </View>
 
       <ScrollView
@@ -220,464 +587,1085 @@ export const AddContentPlaceholderScreen: React.FC = () => {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Format Selector Pill */}
+        {/* Format Selector Bar: Goal | Video | Short | Discuss */}
         <View style={styles.formatSelector}>
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setContentType('video')}
-            style={styles.formatTabTouch}
-          >
-            {contentType === 'video' ? (
-              <LinearGradient
-                colors={['#4F46E5', '#7C3AED']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.formatTabActiveGradient}
+          {([
+            // Goal is temporarily hidden — do not remove, we may re-enable it later.
+            // { key: 'goal', label: 'Goal', icon: 'flag', iconOutline: 'flag-outline' },
+            { key: 'video', label: 'Post', icon: 'add-circle', iconOutline: 'add-circle-outline' },
+            { key: 'short', label: 'Reels', icon: 'film', iconOutline: 'film-outline' },
+            { key: 'text', label: 'Discuss', icon: 'chatbubbles', iconOutline: 'chatbubbles-outline' },
+          ] as const).map((tab) => {
+            const active = contentType === tab.key;
+            return (
+              <TouchableOpacity
+                key={tab.key}
+                activeOpacity={0.8}
+                onPress={() => setContentType(tab.key)}
+                style={styles.formatTabTouch}
               >
-                <Ionicons name="videocam" size={16} color="#FFFFFF" />
-                <Text style={styles.formatTabActiveText}>Video Practice</Text>
-              </LinearGradient>
-            ) : (
-              <View style={styles.formatTabInactive}>
-                <Ionicons name="videocam-outline" size={16} color="#64748B" />
-                <Text style={styles.formatTabInactiveText}>Video Practice</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setContentType('text')}
-            style={styles.formatTabTouch}
-          >
-            {contentType === 'text' ? (
-              <LinearGradient
-                colors={['#4F46E5', '#7C3AED']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.formatTabActiveGradient}
-              >
-                <Ionicons name="chatbubbles" size={16} color="#FFFFFF" />
-                <Text style={styles.formatTabActiveText}>Discussion</Text>
-              </LinearGradient>
-            ) : (
-              <View style={styles.formatTabInactive}>
-                <Ionicons name="chatbubbles-outline" size={16} color="#64748B" />
-                <Text style={styles.formatTabInactiveText}>Discussion</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+                {active ? (
+                  <LinearGradient
+                    colors={['#4F46E5', '#7C3AED']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.formatTabActiveGradient}
+                  >
+                    <Ionicons name={tab.icon} size={14} color="#FFFFFF" />
+                    <Text style={styles.formatTabActiveText}>{tab.label}</Text>
+                  </LinearGradient>
+                ) : (
+                  <View style={styles.formatTabInactive}>
+                    <Ionicons name={tab.iconOutline} size={14} color="#64748B" />
+                    <Text style={styles.formatTabInactiveText}>{tab.label}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
-        {/* Quick Action Tiles (Visual First) */}
-        {contentType === 'video' && (
-          <View style={styles.quickActionsDeck}>
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => handleQuickAction('Record Video Camera')}
-              style={styles.quickTile}
-            >
-              <LinearGradient
-                colors={['#F43F5E', '#E11D48']}
-                style={styles.quickTileIconCircle}
-              >
-                <Ionicons name="radio-button-on" size={18} color="#FFFFFF" />
-              </LinearGradient>
-              <Text style={styles.quickTileLabel}>Record</Text>
-            </TouchableOpacity>
+        {/* ================= GOAL SET FORM & INSTANT ACTIVE GOAL CARD ================= */}
+        {contentType === 'goal' && (
+          <View style={{ gap: spacing.base }}>
+            {/* Instant Active Goal Display Card (Shown when a goal is active) */}
+            {activeGoal && (
+              <View style={styles.activeGoalDisplayCard}>
+                <View style={styles.activeGoalHeaderRow}>
+                  <View style={styles.activeGoalBadge}>
+                    <Ionicons name="flag" size={12} color="#4F46E5" />
+                    <Text style={styles.activeGoalBadgeText}>ACTIVE TARGET GOAL</Text>
+                  </View>
+                  <Text style={styles.activeGoalDueTag}>Due {activeGoal.targetDate}</Text>
+                </View>
 
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => handleQuickAction('Choose From Camera Roll')}
-              style={styles.quickTile}
-            >
-              <LinearGradient
-                colors={['#6366F1', '#4F46E5']}
-                style={styles.quickTileIconCircle}
-              >
-                <Ionicons name="images" size={17} color="#FFFFFF" />
-              </LinearGradient>
-              <Text style={styles.quickTileLabel}>Gallery</Text>
-            </TouchableOpacity>
+                <Text style={styles.activeGoalCardTitle}>{activeGoal.title}</Text>
 
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => handleQuickAction('Record Voice Note')}
-              style={styles.quickTile}
-            >
-              <LinearGradient
-                colors={['#10B981', '#059669']}
-                style={styles.quickTileIconCircle}
-              >
-                <Ionicons name="mic" size={18} color="#FFFFFF" />
-              </LinearGradient>
-              <Text style={styles.quickTileLabel}>Voice</Text>
-            </TouchableOpacity>
+                {/* Progress Bar & Stats */}
+                <View style={styles.activeGoalProgressBox}>
+                  <View style={styles.goalProgressRow}>
+                    <View style={styles.goalProgressBarBg}>
+                      <View
+                        style={[
+                          styles.goalProgressBarFill,
+                          {
+                            width: `${Math.min(
+                              100,
+                              Math.round(
+                                (activeGoal.completedSessions / activeGoal.targetSessions) * 100
+                              )
+                            )}%`,
+                          },
+                        ]}
+                      >
+                        <LinearGradient
+                          colors={['#4F46E5', '#7C3AED']}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={{ flex: 1 }}
+                        />
+                      </View>
+                    </View>
+                    <Text style={styles.goalProgressPercent}>
+                      {activeGoal.completedSessions}/{activeGoal.targetSessions} (
+                      {Math.round(
+                        (activeGoal.completedSessions / activeGoal.targetSessions) * 100
+                      )}
+                      %)
+                    </Text>
+                  </View>
 
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => handleQuickAction('Quick Clip Demo')}
-              style={styles.quickTile}
-            >
-              <LinearGradient
-                colors={['#F59E0B', '#D97706']}
-                style={styles.quickTileIconCircle}
+                  <View style={styles.goalDetailsRow}>
+                    <Text style={styles.goalDetailSubText}>
+                      Commitment: {activeGoal.targetHours} Hours / Week
+                    </Text>
+                    <Text style={styles.goalDetailSubText}>
+                      Reminders: {activeGoal.dailyReminders ? 'Enabled' : 'Disabled'}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Action Buttons */}
+                <View style={styles.activeGoalActionsRow}>
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      logGoalSession();
+                      showDialog({
+                        title: 'Practice Logged!',
+                        message: `Logged session ${Math.min(
+                          activeGoal.completedSessions + 1,
+                          activeGoal.targetSessions
+                        )} of ${activeGoal.targetSessions}! Keep up the consistent progress.`,
+                        icon: 'checkmark-circle-outline',
+                        confirmText: 'Keep Going',
+                      });
+                    }}
+                    style={styles.logSessionActionBtn}
+                  >
+                    <Ionicons name="add-circle" size={16} color="#4F46E5" />
+                    <Text style={styles.logSessionActionText}>Log Practice Session (+1)</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setGoalTitle(activeGoal.title);
+                      setTargetSessions(activeGoal.targetSessions);
+                      setTargetHours(activeGoal.targetHours);
+                      setTargetDate(activeGoal.targetDate);
+                      setDailyReminders(activeGoal.dailyReminders);
+                    }}
+                    style={styles.editGoalActionBtn}
+                  >
+                    <Ionicons name="pencil" size={13} color="#475569" />
+                    <Text style={styles.editGoalActionText}>Edit Goal</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Streamlined Goal Target Settings Card */}
+            <View style={styles.goalSectionBox}>
+              <View style={styles.goalCardHeader}>
+                <View style={styles.goalIconCircle}>
+                  <Ionicons name="compass-outline" size={22} color="#4F46E5" />
+                </View>
+                <View>
+                  <Text style={styles.goalCardTitle}>
+                    {activeGoal ? 'Update Skill Target' : 'Set Your Skill Target'}
+                  </Text>
+                  <Text style={styles.goalCardSub}>
+                    Define practice sessions and weekly commitment hours
+                  </Text>
+                </View>
+              </View>
+
+              {/* Goal Objective Input */}
+              <View style={styles.goalInputGroup}>
+                <Text style={styles.inputLabel}>Skill Goal Objective</Text>
+                <View style={styles.inputWrapper}>
+                  <Ionicons name="flag-outline" size={18} color="#6366F1" style={styles.inputIcon} />
+                  <TextInput
+                    value={goalTitle}
+                    onChangeText={setGoalTitle}
+                    placeholder="e.g. Master High C5 vocal mix & belt phonation"
+                    placeholderTextColor="#94A3B8"
+                    style={styles.textInput}
+                  />
+                </View>
+              </View>
+
+              {/* Targets Split Row: Sessions & Hours */}
+              <View style={styles.targetSplitRow}>
+                {/* Target Sessions Selection */}
+                <View style={[styles.goalInputGroup, { flex: 1 }]}>
+                  <Text style={styles.inputLabel}>Weekly Sessions</Text>
+                  <View style={styles.optionPillRowCompact}>
+                    {[3, 5, 7].map((num) => {
+                      const isSel = targetSessions === num;
+                      return (
+                        <TouchableOpacity
+                          key={num}
+                          activeOpacity={0.8}
+                          onPress={() => setTargetSessions(num)}
+                          style={[styles.targetPillBtnCompact, isSel && styles.targetPillBtnActive]}
+                        >
+                          <Text style={[styles.targetPillTextCompact, isSel && styles.targetPillTextActive]}>
+                            {num} Wk
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {/* Target Hours Selection */}
+                <View style={[styles.goalInputGroup, { flex: 1 }]}>
+                  <Text style={styles.inputLabel}>Weekly Hours</Text>
+                  <View style={styles.optionPillRowCompact}>
+                    {[2.5, 4.0, 6.0].map((hrs) => {
+                      const isSel = targetHours === hrs;
+                      return (
+                        <TouchableOpacity
+                          key={hrs}
+                          activeOpacity={0.8}
+                          onPress={() => setTargetHours(hrs)}
+                          style={[styles.targetPillBtnCompact, isSel && styles.targetPillBtnActive]}
+                        >
+                          <Text style={[styles.targetPillTextCompact, isSel && styles.targetPillTextActive]}>
+                            {hrs}h
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              </View>
+
+              {/* Target Deadline Date & Interactive Custom Date Picker */}
+              <View style={styles.goalInputGroup}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={styles.inputLabel}>Target Completion Date</Text>
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => setShowGoalDatePickerModal(true)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}
+                  >
+                    <Ionicons name="calendar-outline" size={13} color="#4F46E5" />
+                    <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#4F46E5' }}>
+                      Custom Date
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.inputWrapper}>
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={() => setShowGoalDatePickerModal(true)}
+                  >
+                    <Ionicons name="calendar-outline" size={18} color="#6366F1" style={styles.inputIcon} />
+                  </TouchableOpacity>
+                  <TextInput
+                    value={targetDate}
+                    onChangeText={setTargetDate}
+                    placeholder="Target completion date"
+                    placeholderTextColor="#94A3B8"
+                    style={styles.textInput}
+                  />
+                </View>
+
+                {/* Quick Date Presets Strip */}
+                <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                  {[
+                    { label: 'In 30 Days', date: 'October 15, 2026' },
+                    { label: 'In 60 Days', date: 'November 15, 2026' },
+                    { label: 'End of Year', date: 'December 31, 2026' },
+                  ].map((item) => (
+                    <TouchableOpacity
+                      key={item.label}
+                      activeOpacity={0.8}
+                      onPress={() => setTargetDate(item.date)}
+                      style={[
+                        styles.targetPresetChip,
+                        targetDate === item.date && styles.targetPresetChipActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.targetPresetText,
+                          targetDate === item.date && styles.targetPresetTextActive,
+                        ]}
+                      >
+                        {item.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Daily Reminder Switch */}
+              <View style={styles.reminderRow}>
+                <View style={styles.reminderInfo}>
+                  <Ionicons name="notifications-outline" size={18} color="#4F46E5" />
+                  <Text style={styles.reminderText}>Daily Practice Reminder</Text>
+                </View>
+                <Switch
+                  value={dailyReminders}
+                  onValueChange={setDailyReminders}
+                  trackColor={{ false: '#E2E8F0', true: '#A5B4FC' }}
+                  thumbColor={dailyReminders ? '#4F46E5' : '#FFFFFF'}
+                />
+              </View>
+
+              {/* Save Goal Button */}
+              <TouchableOpacity
+                activeOpacity={0.88}
+                onPress={handleSaveGoal}
+                style={styles.saveGoalBtn}
               >
-                <Ionicons name="flash" size={17} color="#FFFFFF" />
-              </LinearGradient>
-              <Text style={styles.quickTileLabel}>Sample</Text>
-            </TouchableOpacity>
+                <LinearGradient
+                  colors={['#4F46E5', '#7C3AED']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.saveGoalGradient}
+                >
+                  <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+                  <Text style={styles.saveGoalText}>
+                    {activeGoal ? 'Update Target Goal' : 'Save Goal Target'}
+                  </Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
-        {/* Video Cinema Preview Card */}
-        {contentType === 'video' && (
-          <View style={[styles.cinemaCard, shadows.card]}>
-            <View style={styles.cinemaMediaContainer}>
-              <Image source={{ uri: currentClip.thumbnail }} style={styles.cinemaImage} />
+        {/* ================= VIDEO / SHORT CAPTURE FORM ================= */}
+        {(contentType === 'video' || contentType === 'short') && (
+          <>
+            {isShort && (
+              <View style={styles.shortHintBox}>
+                <Ionicons name="information-circle-outline" size={15} color="#4F46E5" />
+                <Text style={styles.shortHintText}>
+                  Reels are under 60 seconds and appear in the Reels tab. Video reels
+                  have no thumbnail; voice reels can use a 9:16 cover image.
+                </Text>
+              </View>
+            )}
 
-              <LinearGradient
-                colors={['rgba(15, 23, 42, 0.45)', 'transparent', 'rgba(15, 23, 42, 0.9)']}
-                style={styles.cinemaOverlay}
+            {!isShort && (
+              <Text style={styles.postHint}>Share photos, a video or an audio take with your circles.</Text>
+            )}
+            {/* Capture Tiles */}
+            <View style={[styles.quickActionsDeck, !isShort && styles.quickActionsGrid]}>
+              {!isShort && (
+                <>
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    disabled={busyPicking || isRecording}
+                    onPress={() => handlePhotos(false)}
+                    style={[styles.quickTile, styles.quickTileGrid]}
+                  >
+                    <View style={[styles.quickTileIconCircle, { backgroundColor: '#FCE7F3' }]}>
+                      <Ionicons name="image-outline" size={18} color="#DB2777" />
+                    </View>
+                    <Text style={styles.quickTileLabel}>Photos</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    disabled={busyPicking || isRecording}
+                    onPress={() => handlePhotos(true)}
+                    style={[styles.quickTile, styles.quickTileGrid]}
+                  >
+                    <View style={[styles.quickTileIconCircle, { backgroundColor: '#E0F2FE' }]}>
+                      <Ionicons name="camera-outline" size={18} color="#0284C7" />
+                    </View>
+                    <Text style={styles.quickTileLabel}>Camera</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+              <TouchableOpacity
+                activeOpacity={0.8}
+                disabled={busyPicking || isRecording}
+                onPress={handleRecordVideo}
+                style={[styles.quickTile, !isShort && styles.quickTileGrid]}
               >
-                {/* Top Badges */}
-                <View style={styles.cinemaTopRow}>
-                  <View style={styles.cinemaCategoryBadge}>
-                    <Text style={styles.cinemaCategoryText}>{currentClip.category}</Text>
-                  </View>
-
-                  <View style={styles.durationPill}>
-                    <Ionicons name="time-outline" size={11} color="#FFFFFF" />
-                    <Text style={styles.durationText}>{currentClip.duration}</Text>
-                  </View>
+                <View style={[styles.quickTileIconCircle, { backgroundColor: '#FEE2E2' }]}>
+                  <Ionicons name="videocam-outline" size={18} color="#EF4444" />
                 </View>
+                <Text style={styles.quickTileLabel}>{isShort ? 'Record' : 'Record Video'}</Text>
+              </TouchableOpacity>
 
-                {/* Central Play Button with Halo */}
-                <View style={styles.centerPlayArea}>
-                  <View style={styles.playHalo}>
-                    <LinearGradient
-                      colors={['#6366F1', '#EC4899']}
-                      style={styles.playButton}
-                    >
-                      <Ionicons name="play" size={24} color="#FFFFFF" style={{ marginLeft: 3 }} />
-                    </LinearGradient>
-                  </View>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                disabled={busyPicking || isRecording}
+                onPress={handlePickVideo}
+                style={[styles.quickTile, !isShort && styles.quickTileGrid]}
+              >
+                <View style={[styles.quickTileIconCircle, { backgroundColor: '#EEF2FF' }]}>
+                  <Ionicons name="film-outline" size={17} color="#4F46E5" />
                 </View>
+                <Text style={styles.quickTileLabel}>{isShort ? 'Gallery' : 'Video'}</Text>
+              </TouchableOpacity>
 
-                {/* Audio Waveform Simulation Bar */}
-                <View style={styles.waveformContainer}>
-                  <View style={styles.waveformBars}>
-                    {WAVEFORM_HEIGHTS.map((h, i) => (
-                      <View
-                        key={i}
-                        style={[
-                          styles.waveBar,
-                          { height: h, opacity: i < 11 ? 1 : 0.45 },
-                        ]}
-                      />
-                    ))}
-                  </View>
-                  <Text style={styles.clipTitleOverlay} numberOfLines={1}>
-                    {currentClip.title}
-                  </Text>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                disabled={busyPicking}
+                onPress={handleToggleVoiceRecording}
+                style={[styles.quickTile, !isShort && styles.quickTileGrid]}
+              >
+                <View
+                  style={[
+                    styles.quickTileIconCircle,
+                    { backgroundColor: isRecording ? '#EF4444' : '#D1FAE5' },
+                  ]}
+                >
+                  <Ionicons
+                    name={isRecording ? 'stop' : 'mic-outline'}
+                    size={18}
+                    color={isRecording ? '#FFFFFF' : '#059669'}
+                  />
                 </View>
-              </LinearGradient>
+                <Text style={styles.quickTileLabel}>
+                  {isRecording ? `Stop ${fmtDuration(recordSeconds * 1000)}` : 'Voice'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.8}
+                disabled={busyPicking || isRecording}
+                onPress={handleUploadAudio}
+                style={[styles.quickTile, !isShort && styles.quickTileGrid]}
+              >
+                <View style={[styles.quickTileIconCircle, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="musical-notes-outline" size={17} color="#D97706" />
+                </View>
+                <Text style={styles.quickTileLabel}>Audio</Text>
+              </TouchableOpacity>
             </View>
 
-            {/* Horizontal Thumbnails Strips */}
-            <View style={styles.stripContainer}>
-              <Text style={styles.stripLabel}>Select Practice Clip</Text>
+            {busyPicking && (
+              <View style={styles.pickingRow}>
+                <ActivityIndicator size="small" color="#4F46E5" />
+                <Text style={styles.pickingText}>Preparing media…</Text>
+              </View>
+            )}
+
+            {/* Selected photos */}
+            {photos.length > 0 && (
+              <View style={[styles.photoStripCard, shadows.card]}>
+                <View style={styles.photoStripHead}>
+                  <Ionicons name="images" size={14} color="#DB2777" />
+                  <Text style={styles.photoStripTitle}>
+                    {photos.length} / {MAX_POST_PHOTOS} photos
+                  </Text>
+                  <TouchableOpacity onPress={() => setPhotos([])}>
+                    <Text style={styles.photoStripClear}>Clear</Text>
+                  </TouchableOpacity>
+                </View>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.photoStrip}>
+                  {photos.map((ph, i) => (
+                    <View key={ph.uri} style={styles.photoThumbWrap}>
+                      <Image source={{ uri: ph.uri }} style={styles.photoThumb} />
+                      {i === 0 && (
+                        <View style={styles.photoCoverTag}>
+                          <Text style={styles.photoCoverText}>COVER</Text>
+                        </View>
+                      )}
+                      <TouchableOpacity onPress={() => removePhoto(ph.uri)} style={styles.photoRemove}>
+                        <Ionicons name="close" size={13} color="#FFFFFF" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                  {photos.length < MAX_POST_PHOTOS && (
+                    <TouchableOpacity activeOpacity={0.8} onPress={() => handlePhotos(false)} style={styles.photoAdd}>
+                      <Ionicons name="add" size={26} color="#DB2777" />
+                      <Text style={styles.photoAddText}>Add</Text>
+                    </TouchableOpacity>
+                  )}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* Selected media preview */}
+            {media && (
+              <View style={[styles.previewCard, shadows.card]}>
+                <View
+                  style={[
+                    styles.previewMedia,
+                    media.kind === 'video' && !isShort && styles.previewMediaWide,
+                    isShort && styles.previewMediaVertical,
+                  ]}
+                >
+                  {media.kind === 'video' ? (
+                    thumbUri ? (
+                      <Image source={{ uri: thumbUri }} style={styles.previewImage} />
+                    ) : (
+                      <View style={[styles.previewImage, styles.previewPlaceholder]}>
+                        <Ionicons name="videocam" size={30} color="#94A3B8" />
+                      </View>
+                    )
+                  ) : thumbUri ? (
+                    <Image source={{ uri: thumbUri }} style={styles.previewImage} />
+                  ) : (
+                    <View style={[styles.previewImage, styles.audioPlaceholder]}>
+                      <Ionicons name="musical-notes" size={34} color="#FFFFFF" />
+                      <Text style={styles.audioPlaceholderText}>Now Playing Cover</Text>
+                    </View>
+                  )}
+
+                  <View style={styles.previewBadgeRow}>
+                    <View style={styles.previewKindBadge}>
+                      <Ionicons
+                        name={media.kind === 'video' ? 'videocam' : 'musical-notes'}
+                        size={11}
+                        color="#FFFFFF"
+                      />
+                      <Text style={styles.previewKindText}>
+                        {media.kind === 'video' ? 'VIDEO' : 'AUDIO'}
+                        {isShort ? ' • SHORT' : ''}
+                      </Text>
+                    </View>
+                    {!!fmtDuration(media.durationMs) && (
+                      <View style={styles.durationPill}>
+                        <Ionicons name="time-outline" size={11} color="#FFFFFF" />
+                        <Text style={styles.durationText}>{fmtDuration(media.durationMs)}</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <TouchableOpacity onPress={clearMedia} style={styles.previewRemoveBtn}>
+                    <Ionicons name="close" size={16} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Thumbnail controls — video (non-short) OR any audio; never for a video short */}
+                {!(media.kind === 'video' && isShort) && (
+                  <TouchableOpacity onPress={handleSetThumbnail} style={styles.setThumbBtn}>
+                    <Ionicons name="image-outline" size={16} color="#4F46E5" />
+                    <Text style={styles.setThumbText}>
+                      {thumbUri ? 'Change Thumbnail' : 'Set Thumbnail from Gallery'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </>
+        )}
+
+        {/* ================= INPUTS BLOCK (Video & Discussion) ================= */}
+        {contentType !== 'goal' && (
+          <>
+            {contentType === 'text' ? (
+              <View style={styles.inputsBlock}>
+                <LinearGradient
+                  colors={postBackground(bgKey)}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.discussPreview}
+                >
+                  <Ionicons name="chatbubbles" size={20} color="rgba(255,255,255,0.55)" />
+                  <TextInput
+                    value={description}
+                    onChangeText={setDescription}
+                    placeholder="Share your question or discussion…"
+                    placeholderTextColor="rgba(255,255,255,0.7)"
+                    style={[styles.discussInput, description.length > 140 && styles.discussInputSmall]}
+                    multiline
+                    maxLength={5000}
+                  />
+                </LinearGradient>
+                <Text style={styles.bgLabel}>Background</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bgRow}>
+                  {POST_BACKGROUNDS.map((b) => {
+                    const on = bgKey === b.key;
+                    return (
+                      <TouchableOpacity key={b.key} activeOpacity={0.85} onPress={() => setBgKey(b.key)} style={styles.bgItem}>
+                        <View style={[styles.bgRing, on && styles.bgRingOn]}>
+                          <LinearGradient colors={b.colors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.bgSwatch}>
+                            {on && <Ionicons name="checkmark" size={18} color="#FFFFFF" />}
+                          </LinearGradient>
+                        </View>
+                        <Text style={[styles.bgName, on && styles.bgNameOn]}>{b.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            ) : (
+            <View style={styles.inputsBlock}>
+              <View style={styles.inputWrapper}>
+                <Ionicons name="create-outline" size={17} color="#4F46E5" style={styles.inputIcon} />
+                <TextInput
+                  value={title}
+                  onChangeText={setTitle}
+                  placeholder={isShort ? 'Short Title (e.g. 15s Vocal Run)' : 'Title (e.g. Chorus High Pitch Practice)'}
+                  placeholderTextColor="#94A3B8"
+                  style={styles.textInput}
+                />
+              </View>
+
+              <View style={[styles.inputWrapper, styles.textAreaWrapper]}>
+                <Ionicons
+                  name="document-text-outline"
+                  size={17}
+                  color="#4F46E5"
+                  style={[styles.inputIcon, { marginTop: 10 }]}
+                />
+                <TextInput
+                  value={description}
+                  onChangeText={setDescription}
+                  placeholder="What technique details should mentors evaluate?"
+                  placeholderTextColor="#94A3B8"
+                  style={styles.textArea}
+                  multiline
+                />
+              </View>
+            </View>
+            )}
+
+            {/* Target Communities Selector */}
+            <View style={styles.sectionContainer}>
+              <Text style={styles.sectionHeader}>
+                {isShort ? 'Target Circle (optional)' : 'Target Circle'}
+              </Text>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.stripScroll}
+                contentContainerStyle={styles.chipsScroll}
               >
-                {SAMPLE_CLIPS.map((clip, idx) => {
-                  const isSelected = selectedClipIndex === idx;
+                {joinedCommunityObjects.map((comm) => {
+                  const isSelected = selectedCommunityIds.includes(comm.id);
                   return (
                     <TouchableOpacity
-                      key={clip.id}
+                      key={comm.id}
                       activeOpacity={0.8}
-                      onPress={() => {
-                        setSelectedClipIndex(idx);
-                        if (!title) setTitle(clip.title);
-                      }}
-                      style={[styles.stripThumbnailCard, isSelected && styles.stripThumbnailActive]}
+                      onPress={() => handleToggleCommunity(comm.id)}
+                      style={[styles.commChip, isSelected && styles.commChipSelected]}
                     >
-                      <Image source={{ uri: clip.thumbnail }} style={styles.miniStripImg} />
-                      <LinearGradient
-                        colors={['transparent', 'rgba(0,0,0,0.7)']}
-                        style={styles.miniStripOverlay}
+                      <Text
+                        style={[
+                          styles.commChipText,
+                          isSelected && styles.commChipTextSelected,
+                        ]}
+                        numberOfLines={1}
                       >
-                        <Text style={styles.miniStripDuration}>{clip.duration}</Text>
-                      </LinearGradient>
+                        {comm.name.split('&')[0].trim()}
+                      </Text>
                       {isSelected && (
-                        <View style={styles.selectedCheckOverlay}>
-                          <Ionicons name="checkmark-circle" size={16} color="#6366F1" />
-                        </View>
+                        <Ionicons name="checkmark-circle" size={14} color="#4F46E5" />
                       )}
                     </TouchableOpacity>
                   );
                 })}
               </ScrollView>
             </View>
-          </View>
-        )}
 
-        {/* Sleek Minimal Inputs */}
-        <View style={styles.inputsBlock}>
-          {/* Title Input */}
-          <View style={styles.inputWrapper}>
-            <Ionicons name="sparkles-outline" size={17} color="#6366F1" style={styles.inputIcon} />
-            <TextInput
-              value={title}
-              onChangeText={setTitle}
-              placeholder={contentType === 'video' ? 'Clip Title (e.g. Chorus High Notes)' : 'Discussion Topic...'}
-              placeholderTextColor="#94A3B8"
-              style={styles.textInput}
-            />
-          </View>
-
-          {/* Description Input */}
-          <View style={[styles.inputWrapper, styles.textAreaWrapper]}>
-            <Ionicons
-              name="chatbubble-ellipses-outline"
-              size={17}
-              color="#6366F1"
-              style={[styles.inputIcon, { marginTop: 10 }]}
-            />
-            <TextInput
-              value={description}
-              onChangeText={setDescription}
-              placeholder={
-                contentType === 'video'
-                  ? 'What should mentors listen for? (Pitch, tone, breath)'
-                  : 'Ask question or share your learning tip...'
-              }
-              placeholderTextColor="#94A3B8"
-              style={styles.textArea}
-              multiline
-            />
-          </View>
-        </View>
-
-        {/* Visual Privacy Cards (Public vs Private Vault) */}
-        <View style={styles.sectionContainer}>
-          <Text style={styles.sectionHeader}>Visibility</Text>
-          <View style={styles.privacyDeck}>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => setIsPrivate(false)}
-              style={[
-                styles.privacyCard,
-                !isPrivate && styles.privacyCardActive,
-              ]}
-            >
-              <LinearGradient
-                colors={!isPrivate ? ['#EEF2FF', '#E0E7FF'] : ['#F8FAFC', '#F1F5F9']}
-                style={styles.privacyCardGradient}
+            {/* Skill Focus & Technique Area Section */}
+            <View style={styles.sectionContainer}>
+              <Text style={styles.sectionHeader}>Skill Focus & Technique Area</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.chipsScroll}
               >
-                <View style={styles.privacyTopRow}>
-                  <View
-                    style={[
-                      styles.privacyIconCircle,
-                      !isPrivate && { backgroundColor: '#4F46E5' },
-                    ]}
-                  >
-                    <Ionicons
-                      name="earth"
-                      size={16}
-                      color={!isPrivate ? '#FFFFFF' : '#64748B'}
-                    />
-                  </View>
-                  <Ionicons
-                    name={!isPrivate ? 'checkmark-circle' : 'ellipse-outline'}
-                    size={18}
-                    color={!isPrivate ? '#4F46E5' : '#CBD5E1'}
-                  />
-                </View>
-                <Text style={[styles.privacyTitle, !isPrivate && styles.privacyTitleActive]}>
-                  Public
-                </Text>
-                <Text style={styles.privacySubtitle}>Community + Reels + Everyone</Text>
-              </LinearGradient>
-            </TouchableOpacity>
+                {QUICK_TAGS.map((t) => {
+                  const isSelected = selectedTags.includes(t.label);
+                  return (
+                    <TouchableOpacity
+                      key={t.label}
+                      activeOpacity={0.8}
+                      onPress={() => handleToggleTag(t.label)}
+                      style={[styles.commChip, isSelected && styles.commChipSelected]}
+                    >
+                      <Ionicons
+                        name={t.icon as any}
+                        size={13}
+                        color={isSelected ? '#4F46E5' : '#64748B'}
+                      />
+                      <Text
+                        style={[
+                          styles.commChipText,
+                          isSelected && styles.commChipTextSelected,
+                        ]}
+                      >
+                        {t.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
 
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => setIsPrivate(true)}
-              style={[
-                styles.privacyCard,
-                isPrivate && styles.privacyCardVaultActive,
-              ]}
-            >
-              <LinearGradient
-                colors={isPrivate ? ['#FFFBEB', '#FEF3C7'] : ['#F8FAFC', '#F1F5F9']}
-                style={styles.privacyCardGradient}
-              >
-                <View style={styles.privacyTopRow}>
-                  <View
-                    style={[
-                      styles.privacyIconCircle,
-                      isPrivate && { backgroundColor: '#D97706' },
-                    ]}
-                  >
-                    <Ionicons
-                      name="lock-closed"
-                      size={15}
-                      color={isPrivate ? '#FFFFFF' : '#64748B'}
-                    />
-                  </View>
-                  <Ionicons
-                    name={isPrivate ? 'checkmark-circle' : 'ellipse-outline'}
-                    size={18}
-                    color={isPrivate ? '#D97706' : '#CBD5E1'}
-                  />
-                </View>
-                <Text style={[styles.privacyTitle, isPrivate && { color: '#92400E' }]}>
-                  Circle Only 🔒
-                </Text>
-                <Text style={styles.privacySubtitle}>Private to Circle (Never in Feed)</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Communities Strip (Available for both Public and Private) */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionTitleRow}>
-            <Text style={styles.sectionHeader}>
-              {isPrivate ? 'Select Private Circle 🔒' : 'Target Community Circle'}
-            </Text>
-            <Text style={styles.selectionCount}>
-              {selectedCommunityIds.length} selected
-            </Text>
-          </View>
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipsScroll}
-          >
-            {joinedCommunityObjects.map((comm) => {
-              const isSelected = selectedCommunityIds.includes(comm.id);
-              return (
-                <TouchableOpacity
-                  key={comm.id}
-                  activeOpacity={0.8}
-                  onPress={() => handleToggleCommunity(comm.id)}
-                  style={[styles.commChip, isSelected && styles.commChipSelected]}
-                >
-                  <View style={[styles.commIconBox, { backgroundColor: isSelected ? '#EEF2FF' : comm.iconBgColor }]}>
-                    <Ionicons
-                      name={comm.iconName as keyof typeof Ionicons.glyphMap}
-                      size={14}
-                      color={isSelected ? '#4F46E5' : comm.iconColor}
-                    />
-                  </View>
-                  <Text
-                    style={[
-                      styles.commChipText,
-                      isSelected && styles.commChipTextSelected,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {comm.name.split('&')[0].trim()}
-                  </Text>
-                  {isSelected && (
-                    <Ionicons name="checkmark-circle" size={15} color="#4F46E5" />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* Focus Tags */}
-        <View style={styles.sectionContainer}>
-          <Text style={styles.sectionHeader}>Skill Focus</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipsScroll}
-          >
-            {QUICK_TAGS.map((tag) => {
-              const isSelected = selectedTags.includes(tag.label);
-              return (
-                <TouchableOpacity
-                  key={tag.label}
-                  activeOpacity={0.8}
-                  onPress={() => handleToggleTag(tag.label)}
-                  style={[styles.tagPill, isSelected && styles.tagPillSelected]}
-                >
-                  <Ionicons
-                    name={tag.icon as keyof typeof Ionicons.glyphMap}
-                    size={13}
-                    color={isSelected ? '#4F46E5' : '#64748B'}
-                  />
-                  <Text style={[styles.tagPillText, isSelected && styles.tagPillTextSelected]}>
-                    {tag.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
-
-        {/* VIP Mentor Critique Request Banner */}
-        {!isPrivate && contentType === 'video' && (
-          <View style={[styles.mentorVipCard, shadows.soft]}>
-            <LinearGradient
-              colors={['#FAF5FF', '#F3E8FF']}
-              style={styles.mentorVipGradient}
-            >
-              <View style={styles.mentorVipLeft}>
-                <View style={styles.mentorStarBadge}>
-                  <Ionicons name="star" size={16} color="#FFFFFF" />
-                </View>
-                <View>
-                  <Text style={styles.mentorVipTitle}>Mentor Critique Priority</Text>
-                  <Text style={styles.mentorVipSub}>Verified mentors evaluate pitch & technique</Text>
-                </View>
+              {/* Custom Skill Focus Area Input */}
+              <View style={[styles.inputWrapper, { marginTop: 6 }]}>
+                <Ionicons name="sparkles-outline" size={16} color="#7C3AED" style={styles.inputIcon} />
+                <TextInput
+                  value={customFocusArea}
+                  onChangeText={setCustomFocusArea}
+                  placeholder="Custom technique focus (e.g. High C5 Phonation, Tremolo Picking)"
+                  placeholderTextColor="#94A3B8"
+                  style={styles.textInput}
+                />
               </View>
-              <Switch
-                value={requestMentorCritique}
-                onValueChange={setRequestMentorCritique}
-                trackColor={{ false: '#E2E8F0', true: '#C4B5FD' }}
-                thumbColor={requestMentorCritique ? '#7C3AED' : '#FFFFFF'}
-              />
-            </LinearGradient>
-          </View>
-        )}
+            </View>
 
-        {/* Radiant Share Button */}
-        <TouchableOpacity
-          activeOpacity={0.88}
-          onPress={handlePublish}
-          disabled={isPublishing}
-          style={styles.submitBtn}
-        >
-          <LinearGradient
-            colors={
-              isPrivate
-                ? ['#D97706', '#B45309']
-                : ['#4F46E5', '#7C3AED', '#EC4899']
-            }
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.submitGradient}
-          >
-            <Ionicons name={isPrivate ? 'lock-closed' : 'rocket'} size={19} color="#FFFFFF" />
-            <Text style={styles.submitText}>
-              {isPublishing
-                ? 'Processing...'
-                : isPrivate
-                ? 'Share to Circle Only (Private 🔒)'
-                : 'Publish to Community & Reels 🚀'}
-            </Text>
-          </LinearGradient>
-        </TouchableOpacity>
+            {/* Sharing / visibility — Public · Private · Schedule */}
+            <View style={styles.sectionContainer}>
+              <Text style={styles.sectionHeader}>Visibility</Text>
+              <View style={styles.privacyCardRow}>
+                {/* Option 1: Public */}
+                <TouchableOpacity
+                  activeOpacity={0.88}
+                  onPress={() => {
+                    setIsPrivate(false);
+                    setScheduleMode(false);
+                  }}
+                  style={[
+                    styles.privacyOptionCard,
+                    !isPrivate && !scheduleMode && styles.privacyOptionPublicActive,
+                  ]}
+                >
+                  <View style={[styles.privacyCardIconBox, !isPrivate && !scheduleMode && { backgroundColor: '#EEF2FF' }]}>
+                    <Ionicons name="globe-outline" size={20} color={!isPrivate && !scheduleMode ? '#4F46E5' : '#64748B'} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.privacyCardTitle, !isPrivate && !scheduleMode && { color: '#4F46E5' }]}>
+                      Public
+                    </Text>
+                    <Text style={styles.privacyCardSub}>Visible now in feeds & search</Text>
+                  </View>
+                  {!isPrivate && !scheduleMode && <Ionicons name="checkmark-circle" size={18} color="#4F46E5" />}
+                </TouchableOpacity>
+
+                {/* Option 2: Private */}
+                <TouchableOpacity
+                  activeOpacity={0.88}
+                  onPress={() => {
+                    setIsPrivate(true);
+                    setScheduleMode(false);
+                  }}
+                  style={[styles.privacyOptionCard, isPrivate && styles.privacyOptionPrivateActive]}
+                >
+                  <View style={[styles.privacyCardIconBox, isPrivate && { backgroundColor: '#FEF3C7' }]}>
+                    <Ionicons name="lock-closed-outline" size={20} color={isPrivate ? '#D97706' : '#64748B'} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.privacyCardTitle, isPrivate && { color: '#D97706' }]}>Private</Text>
+                    <Text style={styles.privacyCardSub}>Only you can see it</Text>
+                  </View>
+                  {isPrivate && <Ionicons name="checkmark-circle" size={18} color="#D97706" />}
+                </TouchableOpacity>
+
+                {/* Option 3: Schedule */}
+                <TouchableOpacity
+                  activeOpacity={0.88}
+                  onPress={() => {
+                    setScheduleMode(true);
+                    setIsPrivate(false);
+                    if (!scheduledAt) setScheduledAt(SCHEDULE_PRESETS[0].getDate());
+                  }}
+                  style={[styles.privacyOptionCard, scheduleMode && styles.privacyOptionScheduleActive]}
+                >
+                  <View style={[styles.privacyCardIconBox, scheduleMode && { backgroundColor: '#DCFCE7' }]}>
+                    <Ionicons name="time-outline" size={20} color={scheduleMode ? '#16A34A' : '#64748B'} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.privacyCardTitle, scheduleMode && { color: '#16A34A' }]}>Schedule</Text>
+                    <Text style={styles.privacyCardSub}>
+                      {scheduleMode && scheduledAt
+                        ? `Publishes ${scheduledAt.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                        : 'Publish automatically later'}
+                    </Text>
+                  </View>
+                  {scheduleMode && <Ionicons name="checkmark-circle" size={18} color="#16A34A" />}
+                </TouchableOpacity>
+              </View>
+
+              {/* Schedule: quick presets + full custom date & time */}
+              {scheduleMode && (
+                <>
+                  <View style={styles.schedulePresetRow}>
+                    {SCHEDULE_PRESETS.map((p) => {
+                      const d = p.getDate();
+                      const active = !!scheduledAt && Math.abs(scheduledAt.getTime() - d.getTime()) < 60 * 1000;
+                      return (
+                        <TouchableOpacity
+                          key={p.label}
+                          activeOpacity={0.85}
+                          onPress={() => setScheduledAt(p.getDate())}
+                          style={[styles.schedulePresetChip, active && styles.schedulePresetChipActive]}
+                        >
+                          <Text style={[styles.schedulePresetText, active && styles.schedulePresetTextActive]}>
+                            {p.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={openSchedulePicker}
+                    style={styles.schedulePickBtn}
+                  >
+                    <Ionicons name="calendar-outline" size={16} color="#16A34A" />
+                    <Text style={styles.schedulePickBtnText}>
+                      {scheduledAt
+                        ? `Publishes ${scheduledAt.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                        : 'Pick exact date & time'}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color="#16A34A" />
+                  </TouchableOpacity>
+                </>
+              )}
+            </View>
+
+            {/* Share / Submit Button */}
+            <TouchableOpacity
+              activeOpacity={0.88}
+              onPress={handlePublish}
+              disabled={isPublishing}
+              style={styles.submitBtn}
+            >
+              <LinearGradient
+                colors={['#4F46E5', '#7C3AED']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.submitGradient}
+              >
+                <Ionicons name="paper-plane-outline" size={17} color="#FFFFFF" />
+                <Text style={styles.submitText}>
+                  {isPublishing
+                    ? 'Publishing...'
+                    : isShort
+                    ? 'Publish Short'
+                    : 'Share Practice Content'}
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </>
+        )}
       </ScrollView>
+
+      {/* Dynamic Schedule Date & Time Picker */}
+      <Modal
+        visible={showSchedulePicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSchedulePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.datePickerSheet}>
+            <View style={styles.dragHandle} />
+            <View style={styles.datePickerHeader}>
+              <View>
+                <Text style={styles.datePickerTitle}>Schedule Publish Time</Text>
+                <Text style={styles.datePickerSub}>Pick any future date and time</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowSchedulePicker(false)} style={styles.closePickerBtn}>
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.selectedDateBanner}>
+              <Ionicons name="time" size={18} color="#16A34A" />
+              <Text style={styles.selectedDateText}>
+                {new Date(schedYear, schedMonth, schedDay, schedHour, schedMinute).toLocaleString([], {
+                  weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+                })}
+              </Text>
+            </View>
+
+            {/* Date row: Year / Month / Day */}
+            <View style={styles.dateColumnsWrapper}>
+              <View style={styles.dateColumn}>
+                <Text style={styles.columnLabel}>Year</Text>
+                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
+                  {Array.from({ length: 3 }, (_, i) => new Date().getFullYear() + i).map((y) => {
+                    const isActive = schedYear === y;
+                    return (
+                      <TouchableOpacity key={y} onPress={() => setSchedYear(y)} style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}>
+                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>{y}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+              <View style={styles.dateColumn}>
+                <Text style={styles.columnLabel}>Month</Text>
+                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
+                  {SCHED_MONTH_NAMES.map((name, idx) => {
+                    const isActive = schedMonth === idx;
+                    return (
+                      <TouchableOpacity
+                        key={name}
+                        onPress={() => {
+                          setSchedMonth(idx);
+                          const maxD = new Date(schedYear, idx + 1, 0).getDate();
+                          if (schedDay > maxD) setSchedDay(maxD);
+                        }}
+                        style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}
+                      >
+                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>{name}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+              <View style={styles.dateColumn}>
+                <Text style={styles.columnLabel}>Day</Text>
+                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
+                  {Array.from({ length: daysInSchedMonth }, (_, i) => i + 1).map((d) => {
+                    const isActive = schedDay === d;
+                    return (
+                      <TouchableOpacity key={d} onPress={() => setSchedDay(d)} style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}>
+                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>{String(d).padStart(2, '0')}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </View>
+
+            {/* Time row: Hour / Minute */}
+            <View style={styles.dateColumnsWrapper}>
+              <View style={styles.dateColumn}>
+                <Text style={styles.columnLabel}>Hour</Text>
+                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
+                  {Array.from({ length: 24 }, (_, i) => i).map((h) => {
+                    const isActive = schedHour === h;
+                    const label = `${((h % 12) || 12)}:00 ${h < 12 ? 'AM' : 'PM'}`;
+                    return (
+                      <TouchableOpacity key={h} onPress={() => setSchedHour(h)} style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}>
+                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+              <View style={styles.dateColumn}>
+                <Text style={styles.columnLabel}>Minute</Text>
+                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
+                  {Array.from({ length: 12 }, (_, i) => i * 5).map((m) => {
+                    const isActive = schedMinute === m;
+                    return (
+                      <TouchableOpacity key={m} onPress={() => setSchedMinute(m)} style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}>
+                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>:{String(m).padStart(2, '0')}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </View>
+
+            <TouchableOpacity activeOpacity={0.88} onPress={applySchedulePicker} style={styles.applyDateBtn}>
+              <LinearGradient colors={['#16A34A', '#15803D']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.applyDateGradient}>
+                <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+                <Text style={styles.applyDateText}>Set Schedule Time</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Interactive Goal Date Picker Modal Sheet */}
+      <Modal
+        visible={showGoalDatePickerModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowGoalDatePickerModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.datePickerSheet}>
+            <View style={styles.dragHandle} />
+            <View style={styles.datePickerHeader}>
+              <View>
+                <Text style={styles.datePickerTitle}>Set Custom Goal Target Date</Text>
+                <Text style={styles.datePickerSub}>Pick your target completion year, month, and day</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowGoalDatePickerModal(false)}
+                style={styles.closePickerBtn}
+              >
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Selected Date Preview */}
+            <View style={styles.selectedDateBanner}>
+              <Ionicons name="calendar" size={18} color="#4F46E5" />
+              <Text style={styles.selectedDateText}>
+                {goalYear}-{goalMonth}-{goalDay}
+              </Text>
+            </View>
+
+            {/* 3 Column Date Selector */}
+            <View style={styles.dateColumnsWrapper}>
+              {/* Year Column */}
+              <View style={styles.dateColumn}>
+                <Text style={styles.columnLabel}>Year</Text>
+                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
+                  {['2026', '2027', '2028'].map((y) => {
+                    const isActive = goalYear === y;
+                    return (
+                      <TouchableOpacity
+                        key={y}
+                        onPress={() => setGoalYear(y)}
+                        style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}
+                      >
+                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>
+                          {y}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Month Column */}
+              <View style={styles.dateColumn}>
+                <Text style={styles.columnLabel}>Month</Text>
+                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
+                  {[
+                    { val: '01', name: 'Jan' },
+                    { val: '02', name: 'Feb' },
+                    { val: '03', name: 'Mar' },
+                    { val: '04', name: 'Apr' },
+                    { val: '05', name: 'May' },
+                    { val: '06', name: 'Jun' },
+                    { val: '07', name: 'Jul' },
+                    { val: '08', name: 'Aug' },
+                    { val: '09', name: 'Sep' },
+                    { val: '10', name: 'Oct' },
+                    { val: '11', name: 'Nov' },
+                    { val: '12', name: 'Dec' },
+                  ].map((m) => {
+                    const isActive = goalMonth === m.val;
+                    return (
+                      <TouchableOpacity
+                        key={m.val}
+                        onPress={() => setGoalMonth(m.val)}
+                        style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}
+                      >
+                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>
+                          {m.val} ({m.name})
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Day Column */}
+              <View style={styles.dateColumn}>
+                <Text style={styles.columnLabel}>Day</Text>
+                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
+                  {Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0')).map((d) => {
+                    const isActive = goalDay === d;
+                    return (
+                      <TouchableOpacity
+                        key={d}
+                        onPress={() => setGoalDay(d)}
+                        style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}
+                      >
+                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>
+                          {d}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </View>
+
+            {/* Apply Button */}
+            <TouchableOpacity
+              activeOpacity={0.88}
+              onPress={() => {
+                const monthNames = [
+                  'January', 'February', 'March', 'April', 'May', 'June',
+                  'July', 'August', 'September', 'October', 'November', 'December'
+                ];
+                const mIdx = parseInt(goalMonth, 10) - 1;
+                const formatted = `${monthNames[mIdx] || 'September'} ${parseInt(goalDay, 10)}, ${goalYear}`;
+                setTargetDate(formatted);
+                setShowGoalDatePickerModal(false);
+              }}
+              style={styles.applyDateBtn}
+            >
+              <LinearGradient
+                colors={['#4F46E5', '#7C3AED']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.applyDateGradient}
+              >
+                <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+                <Text style={styles.applyDateText}>Set Target Date ({goalYear}-{goalMonth}-{goalDay})</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -698,9 +1686,9 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F1F5F9',
   },
   closeHeaderBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
@@ -708,20 +1696,11 @@ const styles = StyleSheet.create({
   headerTitleContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
   },
   headerTitle: {
-    fontSize: typography.sizes.base + 1,
+    fontSize: typography.sizes.base,
     fontWeight: typography.weights.bold,
     color: '#0F172A',
-  },
-  sparkBadge: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#EEF2FF',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   publishHeaderBtn: {
     borderRadius: borderRadius.full,
@@ -731,8 +1710,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
   publishHeaderBtnText: {
     fontSize: 12,
@@ -751,6 +1730,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
     borderWidth: 1,
     borderColor: '#E2E8F0',
+    gap: 4,
   },
   formatTabTouch: {
     flex: 1,
@@ -759,12 +1739,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 9,
+    paddingVertical: 8,
     borderRadius: borderRadius.lg,
-    gap: 6,
+    gap: 5,
   },
   formatTabActiveText: {
-    fontSize: typography.sizes.xs + 1,
+    fontSize: 11,
     fontWeight: typography.weights.bold,
     color: '#FFFFFF',
   },
@@ -772,40 +1752,432 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 9,
+    paddingVertical: 8,
     borderRadius: borderRadius.lg,
-    gap: 6,
+    gap: 5,
   },
   formatTabInactiveText: {
-    fontSize: typography.sizes.xs + 1,
+    fontSize: 11,
     fontWeight: typography.weights.medium,
     color: '#64748B',
   },
-  quickActionsDeck: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  // Goal Set Styles & Active Goal Card
+  activeGoalDisplayCard: {
     backgroundColor: '#FFFFFF',
-    paddingVertical: 12,
-    paddingHorizontal: spacing.base,
-    borderRadius: borderRadius.xl,
+    borderRadius: borderRadius.xxl,
+    padding: spacing.base,
+    borderWidth: 1.5,
+    borderColor: '#4F46E5',
+    gap: 10,
+  },
+  activeGoalHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  activeGoalBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+    gap: 4,
+  },
+  activeGoalBadgeText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#4F46E5',
+    letterSpacing: 0.5,
+  },
+  activeGoalDueTag: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  activeGoalCardTitle: {
+    fontSize: 14,
+    fontWeight: typography.weights.bold,
+    color: '#0F172A',
+  },
+  activeGoalProgressBox: {
+    backgroundColor: '#F8FAFC',
+    padding: 10,
+    borderRadius: borderRadius.lg,
+    gap: 6,
+  },
+  goalProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  goalProgressBarBg: {
+    flex: 1,
+    height: 8,
+    backgroundColor: '#E2E8F0',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  goalProgressBarFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  goalProgressPercent: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#4F46E5',
+  },
+  goalDetailsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  goalDetailSubText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  activeGoalActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  logSessionActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: borderRadius.full,
+    gap: 5,
+  },
+  logSessionActionText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#4F46E5',
+  },
+  editGoalActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: borderRadius.full,
+    backgroundColor: '#F1F5F9',
+    gap: 4,
+  },
+  editGoalActionText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  targetSplitRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  optionPillRowCompact: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  targetPillBtnCompact: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+  },
+  targetPillTextCompact: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  targetPresetChip: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 5,
+    paddingHorizontal: 6,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+  },
+  targetPresetChipActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#4F46E5',
+  },
+  targetPresetText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  targetPresetTextActive: {
+    color: '#4F46E5',
+    fontWeight: 'bold',
+  },
+  goalSectionBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: borderRadius.xxl,
+    padding: spacing.base,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: spacing.base,
+  },
+  goalCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 4,
+  },
+  goalIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  goalCardTitle: {
+    fontSize: 15,
+    fontWeight: typography.weights.bold,
+    color: '#0F172A',
+  },
+  goalCardSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  goalInputGroup: {
+    gap: 6,
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  optionPillRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  targetPillBtn: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 9,
+    paddingHorizontal: 6,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+  },
+  targetPillBtnActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#4F46E5',
+  },
+  targetPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  targetPillTextActive: {
+    color: '#4F46E5',
+    fontWeight: 'bold',
+  },
+  reminderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    padding: 12,
+    borderRadius: borderRadius.lg,
     borderWidth: 1,
     borderColor: '#F1F5F9',
   },
+  reminderInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  reminderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155',
+  },
+  saveGoalBtn: {
+    borderRadius: borderRadius.full,
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  saveGoalGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    gap: 6,
+  },
+  saveGoalText: {
+    fontSize: 13,
+    fontWeight: typography.weights.bold,
+    color: '#FFFFFF',
+  },
+  // Video Practice & Shared Styles
+  postHint: { fontSize: 12, color: '#64748B', marginBottom: 8, fontWeight: '600' },
+  quickActionsGrid: { flexWrap: 'wrap', justifyContent: 'flex-start', rowGap: 12, paddingVertical: 12 },
+  quickTileGrid: { width: '33.33%' },
+  photoStripCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 12, marginTop: 12, gap: 10 },
+  photoStripHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  photoStripTitle: { flex: 1, fontSize: 13, fontWeight: '800', color: '#0F172A' },
+  photoStripClear: { fontSize: 12, fontWeight: '800', color: '#DC2626' },
+  photoStrip: { gap: 10 },
+  photoThumbWrap: { width: 92, height: 116, borderRadius: 14, overflow: 'hidden', backgroundColor: '#F1F5F9' },
+  photoThumb: { width: '100%', height: '100%' },
+  photoCoverTag: { position: 'absolute', left: 6, bottom: 6, backgroundColor: 'rgba(15,23,42,0.7)', borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
+  photoCoverText: { fontSize: 8, fontWeight: '900', color: '#FFFFFF' },
+  photoRemove: { position: 'absolute', top: 5, right: 5, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(15,23,42,0.7)', alignItems: 'center', justifyContent: 'center' },
+  photoAdd: { width: 92, height: 116, borderRadius: 14, borderWidth: 2, borderStyle: 'dashed', borderColor: '#F9A8D4', alignItems: 'center', justifyContent: 'center', gap: 2 },
+  photoAddText: { fontSize: 11, fontWeight: '800', color: '#DB2777' },
+  quickActionsDeck: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 10,
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
   quickTile: {
     alignItems: 'center',
-    gap: 5,
+    gap: 4,
   },
   quickTileIconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
   },
   quickTileLabel: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '600',
     color: '#475569',
+  },
+  // Short hint banner
+  shortHintBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#EEF2FF',
+    borderRadius: borderRadius.lg,
+    padding: 10,
+  },
+  shortHintText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#4338CA',
+    lineHeight: 15,
+  },
+  // Picking spinner row
+  pickingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 8,
+  },
+  pickingText: {
+    fontSize: 12,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  // Selected media preview
+  previewCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: borderRadius.xxl,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  previewMedia: {
+    height: 190,
+    backgroundColor: '#0F172A',
+    position: 'relative',
+  },
+  previewMediaWide: {
+    height: undefined,
+    width: '100%',
+    aspectRatio: 16 / 9,
+  },
+  previewMediaVertical: {
+    height: 300, // 9:16 feel for shorts
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  previewPlaceholder: {
+    backgroundColor: '#1E293B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  audioPlaceholder: {
+    backgroundColor: '#4F46E5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  audioPlaceholderText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  previewBadgeRow: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  previewKindBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#4F46E5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+  },
+  previewKindText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  previewRemoveBtn: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(15,23,42,0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  setThumbBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 11,
+    backgroundColor: '#F8FAFC',
+  },
+  setThumbText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4F46E5',
   },
   cinemaCard: {
     backgroundColor: '#FFFFFF',
@@ -815,7 +2187,7 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
   cinemaMediaContainer: {
-    height: 180,
+    height: 160,
     backgroundColor: '#0F172A',
     position: 'relative',
   },
@@ -824,7 +2196,7 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   cinemaOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'space-between',
     padding: spacing.sm,
   },
@@ -834,12 +2206,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   cinemaCategoryBadge: {
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: '#4F46E5',
     paddingHorizontal: 8,
-    paddingVertical: 3,
+    paddingVertical: 2,
     borderRadius: borderRadius.full,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
   },
   cinemaCategoryText: {
     fontSize: 10,
@@ -849,9 +2219,9 @@ const styles = StyleSheet.create({
   durationPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.65)',
     paddingHorizontal: 7,
-    paddingVertical: 3,
+    paddingVertical: 2,
     borderRadius: borderRadius.full,
     gap: 3,
   },
@@ -861,85 +2231,53 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   centerPlayArea: {
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignSelf: 'center',
   },
   playHalo: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: 'rgba(255, 255, 255, 0.25)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   playButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#4F46E5',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  waveformContainer: {
-    gap: 4,
-  },
-  waveformBars: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 3,
-    height: 34,
-  },
-  waveBar: {
-    width: 4,
-    borderRadius: 2,
-    backgroundColor: '#38BDF8',
-  },
-  clipTitleOverlay: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
   stripContainer: {
     padding: spacing.sm,
-    backgroundColor: '#F8FAFC',
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
+    backgroundColor: '#FFFFFF',
   },
   stripLabel: {
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: 'bold',
     color: '#64748B',
     marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
   stripScroll: {
     gap: 8,
   },
   stripThumbnailCard: {
-    width: 72,
-    height: 50,
-    borderRadius: borderRadius.md,
+    width: 60,
+    height: 60,
+    borderRadius: borderRadius.lg,
     overflow: 'hidden',
     position: 'relative',
-    borderWidth: 2,
-    borderColor: 'transparent',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   stripThumbnailActive: {
-    borderColor: '#6366F1',
+    borderColor: '#4F46E5',
+    borderWidth: 2,
   },
   miniStripImg: {
     width: '100%',
     height: '100%',
-  },
-  miniStripOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'flex-end',
-    padding: 3,
-  },
-  miniStripDuration: {
-    fontSize: 8,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
   },
   selectedCheckOverlay: {
     position: 'absolute',
@@ -948,6 +2286,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 8,
   },
+  discussPreview: { borderRadius: 22, padding: 18, minHeight: 170, gap: 6 },
+  discussInput: { fontSize: 20, fontWeight: '800', color: '#FFFFFF', lineHeight: 28, minHeight: 110, textAlignVertical: 'top', padding: 0 },
+  discussInputSmall: { fontSize: 15, lineHeight: 22, fontWeight: '700' },
+  bgLabel: { fontSize: 13, fontWeight: '800', color: '#0F172A', marginTop: 14, marginBottom: 8 },
+  bgRow: { gap: 12, paddingRight: 8 },
+  bgItem: { alignItems: 'center', gap: 4 },
+  bgRing: { padding: 3, borderRadius: 24, borderWidth: 2, borderColor: 'transparent' },
+  bgRingOn: { borderColor: '#4F46E5' },
+  bgSwatch: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  bgName: { fontSize: 10, fontWeight: '700', color: '#64748B' },
+  bgNameOn: { color: '#4F46E5' },
   inputsBlock: {
     gap: spacing.sm,
   },
@@ -958,103 +2307,44 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.sm,
+  },
+  inputIcon: {
+    marginRight: 8,
+  },
+  textInput: {
+    flex: 1,
+    paddingVertical: 10,
+    fontSize: 13,
+    color: '#0F172A',
   },
   textAreaWrapper: {
     alignItems: 'flex-start',
   },
-  inputIcon: {
-    marginRight: spacing.sm,
-  },
-  textInput: {
-    flex: 1,
-    paddingVertical: 12,
-    fontSize: typography.sizes.sm,
-    color: colors.textPrimary,
-  },
   textArea: {
     flex: 1,
     paddingVertical: 10,
-    fontSize: typography.sizes.sm,
-    color: colors.textPrimary,
-    minHeight: 70,
-    textAlignVertical: 'top',
+    fontSize: 13,
+    color: '#0F172A',
+    minHeight: 65,
   },
   sectionContainer: {
     gap: 6,
   },
   sectionHeader: {
-    fontSize: typography.sizes.xs + 1,
+    fontSize: 12,
     fontWeight: typography.weights.bold,
-    color: '#334155',
-  },
-  sectionTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  selectionCount: {
-    fontSize: 10,
-    color: colors.primary,
-    fontWeight: 'bold',
-  },
-  privacyDeck: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  privacyCard: {
-    flex: 1,
-    borderRadius: borderRadius.xl,
-    overflow: 'hidden',
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-  },
-  privacyCardActive: {
-    borderColor: '#4F46E5',
-  },
-  privacyCardVaultActive: {
-    borderColor: '#D97706',
-  },
-  privacyCardGradient: {
-    padding: 12,
-    gap: 4,
-  },
-  privacyTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 4,
-  },
-  privacyIconCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#E2E8F0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  privacyTitle: {
-    fontSize: typography.sizes.xs + 1,
-    fontWeight: typography.weights.bold,
-    color: '#1E293B',
-  },
-  privacyTitleActive: {
-    color: '#4F46E5',
-  },
-  privacySubtitle: {
-    fontSize: 10,
-    color: '#64748B',
+    color: '#0F172A',
   },
   chipsScroll: {
     gap: 8,
-    paddingRight: spacing.sm,
   },
   commChip: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    paddingVertical: 6,
     paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: borderRadius.full,
     borderWidth: 1,
     borderColor: '#E2E8F0',
@@ -1062,14 +2352,7 @@ const styles = StyleSheet.create({
   },
   commChipSelected: {
     borderColor: '#4F46E5',
-    backgroundColor: '#FAF9FF',
-  },
-  commIconBox: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: '#EEF2FF',
   },
   commChipText: {
     fontSize: 11,
@@ -1080,41 +2363,15 @@ const styles = StyleSheet.create({
     color: '#4F46E5',
     fontWeight: 'bold',
   },
-  tagPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 6,
-    paddingHorizontal: 11,
-    borderRadius: borderRadius.full,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 5,
-  },
-  tagPillSelected: {
-    backgroundColor: '#EDE9FE',
-    borderColor: '#7C3AED',
-  },
-  tagPillText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#475569',
-  },
-  tagPillTextSelected: {
-    color: '#7C3AED',
-    fontWeight: 'bold',
-  },
   mentorVipCard: {
+    backgroundColor: '#FFFFFF',
     borderRadius: borderRadius.xl,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#E9D5FF',
-  },
-  mentorVipGradient: {
+    padding: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   mentorVipLeft: {
     flexDirection: 'row',
@@ -1122,45 +2379,232 @@ const styles = StyleSheet.create({
     gap: 10,
     flex: 1,
   },
-  mentorStarBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#7C3AED',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   mentorVipTitle: {
-    fontSize: typography.sizes.xs + 1,
+    fontSize: 12,
     fontWeight: typography.weights.bold,
-    color: '#581C87',
+    color: '#0F172A',
   },
   mentorVipSub: {
     fontSize: 10,
-    color: '#7E22CE',
-    marginTop: 1,
+    color: '#64748B',
   },
   submitBtn: {
-    borderRadius: borderRadius.xl,
+    borderRadius: borderRadius.full,
     overflow: 'hidden',
     marginTop: spacing.xs,
-    shadowColor: '#4F46E5',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    elevation: 6,
   },
   submitGradient: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
+    paddingVertical: 12,
     gap: 8,
   },
   submitText: {
-    fontSize: typography.sizes.sm,
+    fontSize: 13,
     fontWeight: typography.weights.bold,
     color: '#FFFFFF',
-    letterSpacing: 0.2,
+  },
+  // Goal Date Picker Sheet Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'flex-end',
+  },
+  datePickerSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: borderRadius.xxl,
+    borderTopRightRadius: borderRadius.xxl,
+    padding: spacing.base,
+    gap: spacing.sm,
+  },
+  dragHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#CBD5E1',
+    alignSelf: 'center',
+    marginBottom: 4,
+  },
+  datePickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  datePickerTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#0F172A',
+  },
+  datePickerSub: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+  closePickerBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectedDateBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: borderRadius.lg,
+    gap: 8,
+  },
+  selectedDateText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#4F46E5',
+  },
+  dateColumnsWrapper: {
+    flexDirection: 'row',
+    height: 170,
+    gap: 8,
+  },
+  dateColumn: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderRadius: borderRadius.lg,
+    padding: 6,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  columnLabel: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#64748B',
+    textAlign: 'center',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  columnScroll: {
+    flex: 1,
+  },
+  dateOptionBtn: {
+    paddingVertical: 6,
+    alignItems: 'center',
+    borderRadius: borderRadius.md,
+    marginBottom: 3,
+  },
+  dateOptionBtnActive: {
+    backgroundColor: '#4F46E5',
+  },
+  dateOptionText: {
+    fontSize: 12,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  dateOptionTextActive: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+  },
+  applyDateBtn: {
+    borderRadius: borderRadius.full,
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  applyDateGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 11,
+    gap: 6,
+  },
+  applyDateText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  // Privacy Scope Option Cards
+  privacyCardRow: {
+    gap: 8,
+  },
+  privacyOptionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    padding: spacing.md,
+    borderRadius: borderRadius.xl,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    gap: 12,
+  },
+  privacyOptionPublicActive: {
+    borderColor: '#4F46E5',
+    backgroundColor: '#EEF2FF',
+  },
+  privacyOptionPrivateActive: {
+    borderColor: '#F59E0B',
+    backgroundColor: '#FFFBEB',
+  },
+  privacyOptionScheduleActive: {
+    borderColor: '#16A34A',
+    backgroundColor: '#F0FDF4',
+  },
+  schedulePresetRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  schedulePickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: borderRadius.xl,
+    borderWidth: 1.5,
+    borderColor: '#BBF7D0',
+    backgroundColor: '#F0FDF4',
+  },
+  schedulePickBtnText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#166534',
+  },
+  schedulePresetChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: borderRadius.full,
+    backgroundColor: '#F1F5F9',
+  },
+  schedulePresetChipActive: {
+    backgroundColor: '#DCFCE7',
+  },
+  schedulePresetText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  schedulePresetTextActive: {
+    color: '#15803D',
+    fontWeight: 'bold',
+  },
+  privacyCardIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  privacyCardTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#0F172A',
+  },
+  privacyCardSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
   },
 });

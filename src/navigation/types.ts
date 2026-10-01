@@ -2,15 +2,17 @@ import { NavigatorScreenParams } from '@react-navigation/native';
 
 export type MainTabParamList = {
   HomeTab: undefined;
-  CommunityTab: undefined;
-  AddTab: undefined;
-  FeedTab: undefined;
-  ProfileTab: undefined;
+  ReelsTab: undefined;
+  AddTab: { circleId?: string } | undefined;
+  CirclesTab: { openCircleId?: string } | undefined;
+  RankTab: undefined;
 };
 
 export type AuthStackParamList = {
+  Splash: undefined;
   Login: undefined;
   SignUp: undefined;
+  ForgotPassword: undefined;
   CommunityRecommendation: undefined;
   RoleSelection: undefined;
   MentorQuiz: undefined;

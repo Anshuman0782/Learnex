@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,70 +6,234 @@ import {
   FlatList,
   TouchableOpacity,
   Image,
-  TextInput,
   Dimensions,
   Alert,
   Platform,
   Share,
+  PanResponder,
+  Pressable,
+  Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
 import { useApp } from '../../context/AppContext';
+import { followUserRequest, unfollowUserRequest } from '../../api/social.api';
 import { Avatar } from '../../components/common/Avatar';
-import { CritiqueModal } from '../../components/community/CritiqueModal';
+import { MusicAnimation } from '../../components/common/NowPlayingBar';
+import { CommentsSheet } from '../../components/community/CommentsSheet';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 import { CommunityPost } from '../../types';
 
 const { width: SCREEN_WIDTH, height: WINDOW_HEIGHT } = Dimensions.get('window');
 
+/**
+ * A single reel's media layer (presentational — no video player of its own).
+ * The ACTIVE reel binds to a single shared player passed from the screen; every
+ * other reel just shows its poster. This avoids spinning up one native player
+ * per list item (which crashes on Expo Go). Single tap = pause/play, double tap
+ * = like with a heart pop.
+ */
+const ReelMedia: React.FC<{
+  item: CommunityPost;
+  isActive: boolean;
+  paused: boolean;
+  videoReady: boolean;
+  onSingleTap: () => void;
+}> = ({ item, isActive, paused, videoReady, onSingleTap }) => {
+  const { toggleLikePost, audioPost, isAudioPlaying } = useApp();
+
+  const isAudioReel = item.postType === 'audio' || (!!item.audioUrl && !item.videoUrl);
+  const isThisAudioActive = audioPost?.id === item.id && isAudioPlaying;
+  // The shared screen-level video only shows through once it is actually ready to
+  // play. Until then we keep the poster/placeholder up so scrolling between reels
+  // is seamless (no black flash / spinner on every reel).
+  const showVideo = isActive && !isAudioReel && !!item.videoUrl && videoReady;
+
+  const lastTap = useRef(0);
+  const singleTapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartScale = useRef(new Animated.Value(0)).current;
+
+  const popHeart = () => {
+    heartScale.setValue(0);
+    Animated.sequence([
+      Animated.spring(heartScale, { toValue: 1, useNativeDriver: true, friction: 4 }),
+      Animated.timing(heartScale, { toValue: 0, delay: 450, duration: 250, useNativeDriver: true }),
+    ]).start();
+  };
+
+  const onTap = () => {
+    const now = Date.now();
+    if (now - lastTap.current < 280) {
+      if (singleTapTimer.current) {
+        clearTimeout(singleTapTimer.current);
+        singleTapTimer.current = null;
+      }
+      lastTap.current = 0;
+      if (!item.isLiked) toggleLikePost(item.id);
+      popHeart();
+    } else {
+      lastTap.current = now;
+      singleTapTimer.current = setTimeout(() => {
+        onSingleTap();
+        singleTapTimer.current = null;
+      }, 280);
+    }
+  };
+
+  // Show the center play icon when the active media is paused / not playing.
+  const showPlayIcon = isActive && (isAudioReel ? !isThisAudioActive : paused);
+
+  return (
+    <View style={StyleSheet.absoluteFill}>
+      {/* Background media. For the ACTIVE video we render nothing here — the
+          single screen-level VideoView shows through this transparent area
+          (mounting a VideoView per item crashes, so we never do that). */}
+      {showVideo ? null : item.videoThumbnail ? (
+        <Image source={{ uri: item.videoThumbnail }} style={styles.reelMediaImage} resizeMode="cover" />
+      ) : isAudioReel ? (
+        <View style={[styles.reelMediaImage, styles.reelAudioBg]}>
+          <MusicAnimation active={isThisAudioActive} size={120} />
+        </View>
+      ) : (
+        <View style={[styles.reelMediaImage, styles.reelVideoBg]}>
+          <Ionicons name="videocam" size={64} color="#334155" />
+        </View>
+      )}
+
+      {/* Vignette */}
+      <LinearGradient
+        colors={['rgba(15, 23, 42, 0.55)', 'transparent', 'rgba(15, 23, 42, 0.92)']}
+        style={styles.vignetteOverlay}
+        pointerEvents="none"
+      />
+
+      {/* Tap layer ON TOP of the video (native video would otherwise eat taps) */}
+      <Pressable style={StyleSheet.absoluteFill} onPress={onTap} />
+
+      {/* Center play/pause indicator */}
+      {showPlayIcon && (
+        <View style={styles.playPauseTouchArea} pointerEvents="none">
+          <View style={styles.pausedCenterIconCircle}>
+            <Ionicons name="play" size={36} color="#FFFFFF" style={{ marginLeft: 3 }} />
+          </View>
+        </View>
+      )}
+
+      {/* Double-tap heart animation */}
+      <View style={styles.heartOverlay} pointerEvents="none">
+        <Animated.View style={{ transform: [{ scale: heartScale }], opacity: heartScale }}>
+          <Ionicons name="heart" size={120} color="#FFFFFF" />
+        </Animated.View>
+      </View>
+    </View>
+  );
+};
+
 const WAVEFORM_HEIGHTS = [8, 16, 24, 18, 28, 14, 26, 32, 20, 15, 28, 34, 22, 12, 26, 18, 10, 22, 16, 28];
 
 export const FeedPlaceholderScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
   const {
-    posts,
+    reels: reelsData,
+    loadReels,
+    user,
     toggleLikePost,
     toggleSavePost,
+    pressRepost,
+    playAudioPost,
+    closeAudioPost,
+    toggleAudioPlayback,
     openUserProfile,
+    recordPostView,
   } = useApp();
+
+  // Reels whose view has already been counted this session (avoid double counting).
+  const viewedReelIds = useRef<Set<string>>(new Set());
+  const viewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Real follow state keyed by the author's user id.
+  const [followedIds, setFollowedIds] = useState<Record<string, boolean>>({});
+  const [toast, setToast] = useState<string | null>(null);
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = (message: string) => {
+    setToast(message);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    Animated.timing(toastAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    toastTimer.current = setTimeout(() => {
+      Animated.timing(toastAnim, { toValue: 0, duration: 250, useNativeDriver: true }).start(() =>
+        setToast(null),
+      );
+    }, 2200);
+  };
+
+  const handleFollowAuthor = async (item: CommunityPost) => {
+    if (!item.authorId) {
+      Alert.alert('Unavailable', 'This creator can’t be followed from here yet.');
+      return;
+    }
+    if (item.authorId === user?.id) {
+      showToast("That's you 🙂");
+      return;
+    }
+    const currently = !!followedIds[item.authorId];
+    const next = !currently;
+    setFollowedIds((prev) => ({ ...prev, [item.authorId as string]: next }));
+    showToast(next ? `You're now following ${item.authorName}` : `Unfollowed ${item.authorName}`);
+    try {
+      if (next) await followUserRequest(item.authorId);
+      else await unfollowUserRequest(item.authorId);
+    } catch {
+      // revert on failure
+      setFollowedIds((prev) => ({ ...prev, [item.authorId as string]: currently }));
+      showToast('Could not update follow. Try again.');
+    }
+  };
+
+  // ONE shared video player for the whole reels feed (only the active reel uses
+  // it). Creating a player per item crashes Expo Go, so we never do that.
+  const player = useVideoPlayer(null, (p) => {
+    p.loop = true;
+  });
+  const [isVideoPaused, setIsVideoPaused] = useState(false);
+  // True once the active video reel is decoded and showing frames.
+  const [videoReady, setVideoReady] = useState(false);
+
+  // Refresh the shorts feed when this tab mounts.
+  useEffect(() => {
+    void loadReels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // PanResponder for smooth screen swiping gesture (Slide Right -> Switch to Home)
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return Math.abs(gestureState.dx) > 35 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx > 50) {
+          navigation.navigate('HomeTab');
+        }
+      },
+    })
+  ).current;
 
   const [containerHeight, setContainerHeight] = useState<number>(
     WINDOW_HEIGHT - (Platform.OS === 'ios' ? 88 : 75)
   );
   const [activeReelIndex, setActiveReelIndex] = useState(0);
-  const [activeCritiquePost, setActiveCritiquePost] = useState<CommunityPost | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [commentsPost, setCommentsPost] = useState<CommunityPost | null>(null);
   const [isMuted, setIsMuted] = useState(false);
-  const [playingStates, setPlayingStates] = useState<Record<string, boolean>>({});
-  const [followedAuthors, setFollowedAuthors] = useState<Record<string, boolean>>({});
 
-  // Filter reels based on Search Query, Public visibility, and Media availability
-  // (Private community posts are never shown in the public Reels feed)
-  const reels = posts.filter((p) => {
-    // Only public videos appear in Reels feed
-    if (p.isPrivate) return false;
-
-    // Search query filter
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchesTitle = (p.videoTitle || '').toLowerCase().includes(q);
-      const matchesContent = p.content.toLowerCase().includes(q);
-      const matchesAuthor = p.authorName.toLowerCase().includes(q);
-      const matchesTag = (p.tag || '').toLowerCase().includes(q);
-      const matchesCommunity = p.communityName.toLowerCase().includes(q);
-      if (!matchesTitle && !matchesContent && !matchesAuthor && !matchesTag && !matchesCommunity) {
-        return false;
-      }
-    }
-
-    return true;
-  });
-
-  const togglePlayPause = (id: string) => {
-    setPlayingStates((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
+  // The Reels feed is server-provided shorts (isShort=true) that are public.
+  const reels = reelsData.filter((p) => !p.isPrivate);
 
   const handleShare = async (post: CommunityPost) => {
     try {
@@ -81,28 +245,129 @@ export const FeedPlaceholderScreen: React.FC = () => {
     }
   };
 
-  const handleToggleFollow = (authorName: string) => {
-    setFollowedAuthors((prev) => {
-      const next = !prev[authorName];
-      Alert.alert(
-        next ? 'Connected! ✨' : 'Unfollowed',
-        next
-          ? `You are now following ${authorName}. You'll see their practice takes first.`
-          : `Removed ${authorName} from followed peers.`
-      );
-      return { ...prev, [authorName]: next };
-    });
-  };
-
   const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
     if (viewableItems && viewableItems.length > 0) {
       setActiveReelIndex(viewableItems[0].index || 0);
     }
   }).current;
 
+  const activeReel = reels[activeReelIndex];
+  const activeIsAudio =
+    !!activeReel && (activeReel.postType === 'audio' || (!!activeReel.audioUrl && !activeReel.videoUrl));
+
+  // Drive the single shared player from the active reel.
+  useEffect(() => {
+    const active = reels[activeReelIndex];
+    if (!active) return;
+    const isAudio = active.postType === 'audio' || (!!active.audioUrl && !active.videoUrl);
+    setIsVideoPaused(false);
+    setVideoReady(false);
+
+    // Count a view after the reel has been on screen for ~2.5s (once per session).
+    if (viewTimerRef.current) clearTimeout(viewTimerRef.current);
+    if (!viewedReelIds.current.has(active.id)) {
+      viewTimerRef.current = setTimeout(() => {
+        viewedReelIds.current.add(active.id);
+        void recordPostView(active.id);
+      }, 2500);
+    }
+
+    let cancelled = false;
+    let sub: { remove: () => void } | null = null;
+
+    if (isAudio) {
+      setVideoReady(true); // audio reels show their art immediately
+      try {
+        player.pause();
+      } catch {
+        /* ignore */
+      }
+      if (active.audioUrl) playAudioPost(active);
+    } else if (active.videoUrl) {
+      closeAudioPost(); // stop any audio when a video reel is shown
+      sub = player.addListener('statusChange', ({ status }) => {
+        if (cancelled) return;
+        if (status === 'readyToPlay') {
+          setVideoReady(true);
+          try {
+            player.play();
+          } catch {
+            /* ignore */
+          }
+        }
+      });
+      (async () => {
+        try {
+          await player.replaceAsync(active.videoUrl!);
+          player.muted = isMuted;
+          if (!cancelled) player.play();
+        } catch {
+          /* ignore */
+        }
+      })();
+    } else {
+      setVideoReady(true);
+      try {
+        player.pause();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return () => {
+      cancelled = true;
+      if (sub) sub.remove();
+      if (viewTimerRef.current) {
+        clearTimeout(viewTimerRef.current);
+        viewTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeReelIndex, reels.length]);
+
+  // Keep the shared player's mute in sync with the header toggle.
+  useEffect(() => {
+    try {
+      player.muted = isMuted;
+    } catch {
+      /* ignore */
+    }
+  }, [isMuted, player]);
+
+  // Stop playback when leaving the Reels tab.
+  useEffect(() => {
+    const unsub = navigation.addListener('blur', () => {
+      try {
+        player.pause();
+      } catch {
+        /* ignore */
+      }
+      setIsVideoPaused(true);
+    });
+    return unsub;
+  }, [navigation, player]);
+
+  const toggleActivePause = () => {
+    if (activeIsAudio) {
+      toggleAudioPlayback();
+      return;
+    }
+    setIsVideoPaused((prev) => {
+      const next = !prev;
+      try {
+        if (next) player.pause();
+        else player.play();
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
   return (
     <View
       style={styles.container}
+      {...panResponder.panHandlers}
       onLayout={(e) => {
         const h = e.nativeEvent.layout.height;
         if (h > 200) setContainerHeight(h);
@@ -113,31 +378,10 @@ export const FeedPlaceholderScreen: React.FC = () => {
         <View style={styles.headerTopRow}>
           <View style={styles.headerTitleGroup}>
             <Text style={styles.reelsMainTitle}>Reels</Text>
-            <LinearGradient
-              colors={['#F43F5E', '#EC4899']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.liveFeedPill}
-            >
-              <View style={styles.livePulseDot} />
-              <Text style={styles.liveFeedPillText}>Live Practice</Text>
-            </LinearGradient>
           </View>
 
           {/* Right Header Actions */}
           <View style={styles.headerRightActions}>
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => setIsSearchOpen(!isSearchOpen)}
-              style={[styles.headerIconBtn, isSearchOpen && styles.headerIconBtnActive]}
-            >
-              <Ionicons
-                name={isSearchOpen ? 'close' : 'search'}
-                size={18}
-                color="#FFFFFF"
-              />
-            </TouchableOpacity>
-
             <TouchableOpacity
               activeOpacity={0.8}
               onPress={() => setIsMuted(!isMuted)}
@@ -151,79 +395,74 @@ export const FeedPlaceholderScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
         </View>
-
-        {/* Expandable Search Input */}
-        {isSearchOpen && (
-          <View style={styles.searchBarWrapper}>
-            <Ionicons name="search" size={16} color="#94A3B8" style={{ marginLeft: 10 }} />
-            <TextInput
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              placeholder="Search reels by skill, mentor, #tag, or topic..."
-              placeholderTextColor="#94A3B8"
-              style={styles.searchInput}
-              autoFocus
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 6 }}>
-                <Ionicons name="close-circle" size={16} color="#CBD5E1" />
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
       </View>
+
+      {/* Top follow/action toast */}
+      {toast && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.toast,
+            {
+              top: Math.max(insets.top, 12) + 54,
+              opacity: toastAnim,
+              transform: [
+                { translateY: toastAnim.interpolate({ inputRange: [0, 1], outputRange: [-12, 0] }) },
+              ],
+            },
+          ]}
+        >
+          <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />
+          <Text style={styles.toastText}>{toast}</Text>
+        </Animated.View>
+      )}
+
+      {/* Single persistent video layer (behind the list). Only the active video
+          reel is transparent, so this shows through there. Never unmounts → no
+          per-item VideoView crash. */}
+      <VideoView
+        player={player}
+        style={styles.reelBgVideo}
+        contentFit="cover"
+        nativeControls={false}
+        pointerEvents="none"
+      />
 
       {/* Main Reels Vertical Swiper */}
       {reels.length > 0 ? (
         <FlatList
           data={reels}
           keyExtractor={(item) => item.id}
+          style={styles.reelList}
           pagingEnabled
           showsVerticalScrollIndicator={false}
           snapToInterval={containerHeight}
           snapToAlignment="start"
           decelerationRate="fast"
+          onLayout={(e) => {
+            // Measure the actual list area so each reel fills it exactly (no gap).
+            const h = e.nativeEvent.layout.height;
+            if (h > 200 && Math.abs(h - containerHeight) > 1) setContainerHeight(h);
+          }}
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
           renderItem={({ item, index }) => {
-            const isPaused = playingStates[item.id] || false;
             const isSaved = !!item.isSaved;
-            const isFollowing = followedAuthors[item.authorName];
+            const isFollowing = item.authorId ? !!followedIds[item.authorId] : false;
+            const isSelfAuthor = !!item.authorId && item.authorId === user?.id;
             const mentorCritique = item.comments?.find((c) => c.isMentorCritique || c.commentType === 'mentor');
-            const generalCount = item.generalCommentsCount || item.comments?.filter((c) => !c.isMentorCritique).length || 0;
             const mentorCritiqueCount = item.mentorCritiqueCount || item.comments?.filter((c) => c.isMentorCritique).length || 0;
 
             return (
               <View style={[styles.reelContainer, { height: containerHeight }]}>
-                {/* Background Video Media / Thumbnail */}
-                <Image
-                  source={{
-                    uri:
-                      item.videoThumbnail ||
-                      'https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=800&auto=format&fit=crop&q=80',
-                  }}
-                  style={styles.reelMediaImage}
-                  resizeMode="cover"
+                {/* Inline autoplay media (tap = pause/play, double-tap = like) */}
+                <ReelMedia
+                  item={item}
+                  isActive={index === activeReelIndex}
+                  paused={isVideoPaused}
+                  videoReady={index === activeReelIndex && videoReady}
+                  onSingleTap={toggleActivePause}
                 />
-
-                {/* Cinematic Vignette Gradients */}
-                <LinearGradient
-                  colors={['rgba(15, 23, 42, 0.65)', 'transparent', 'rgba(15, 23, 42, 0.95)']}
-                  style={styles.vignetteOverlay}
-                />
-
-                {/* Center Tap to Play/Pause Area */}
-                <TouchableOpacity
-                  activeOpacity={1}
-                  onPress={() => togglePlayPause(item.id)}
-                  style={styles.playPauseTouchArea}
-                >
-                  {isPaused && (
-                    <View style={styles.pausedCenterIconCircle}>
-                      <Ionicons name="play" size={36} color="#FFFFFF" style={{ marginLeft: 3 }} />
-                    </View>
-                  )}
-                </TouchableOpacity>
 
                 {/* ================= RIGHT ACTION DOCK (INSTAGRAM REELS STYLE) ================= */}
                 <View style={styles.actionDock}>
@@ -233,6 +472,7 @@ export const FeedPlaceholderScreen: React.FC = () => {
                       activeOpacity={0.8}
                       onPress={() =>
                         openUserProfile({
+                          id: item.authorId,
                           name: item.authorName,
                           avatarUrl: item.authorAvatar,
                           role: item.authorRole,
@@ -250,10 +490,10 @@ export const FeedPlaceholderScreen: React.FC = () => {
                       />
                     </TouchableOpacity>
 
-                    {item.authorRole !== 'Mentor' && (
+                    {!isSelfAuthor && (
                       <TouchableOpacity
                         activeOpacity={0.8}
-                        onPress={() => handleToggleFollow(item.authorName)}
+                        onPress={() => handleFollowAuthor(item)}
                         style={[styles.followPlusBtn, isFollowing && styles.followPlusBtnActive]}
                       >
                         <Ionicons
@@ -283,10 +523,10 @@ export const FeedPlaceholderScreen: React.FC = () => {
                     </Text>
                   </TouchableOpacity>
 
-                  {/* Comment & Critique Button (Dual Type Trigger) */}
+                  {/* Comment Button — opens the comments-only sheet */}
                   <TouchableOpacity
                     activeOpacity={0.7}
-                    onPress={() => setActiveCritiquePost(item)}
+                    onPress={() => setCommentsPost(item)}
                     style={styles.dockBtn}
                   >
                     <View style={styles.dockIconCircle}>
@@ -326,6 +566,20 @@ export const FeedPlaceholderScreen: React.FC = () => {
                     </View>
                     <Text style={[styles.dockCountText, isSaved && { color: '#F59E0B' }]}>
                       {isSaved ? 'Saved' : 'Save'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Repost Button */}
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => pressRepost(item)}
+                    style={styles.dockBtn}
+                  >
+                    <View style={[styles.dockIconCircle, item.isReposted && styles.dockIconRepostedCircle]}>
+                      <MaterialCommunityIcons name="repeat" size={24} color={item.isReposted ? '#16A34A' : '#FFFFFF'} />
+                    </View>
+                    <Text style={[styles.dockCountText, item.isReposted && { color: '#4ADE80' }]}>
+                      {item.repostsCount ?? 0}
                     </Text>
                   </TouchableOpacity>
 
@@ -383,6 +637,7 @@ export const FeedPlaceholderScreen: React.FC = () => {
                     activeOpacity={0.8}
                     onPress={() =>
                       openUserProfile({
+                        id: item.authorId,
                         name: item.authorName,
                         avatarUrl: item.authorAvatar,
                         role: item.authorRole,
@@ -422,7 +677,7 @@ export const FeedPlaceholderScreen: React.FC = () => {
                   {mentorCritique && (
                     <TouchableOpacity
                       activeOpacity={0.85}
-                      onPress={() => setActiveCritiquePost(item)}
+                      onPress={() => setCommentsPost(item)}
                       style={styles.mentorCritiquePreviewBox}
                     >
                       <View style={styles.mentorPreviewTop}>
@@ -454,7 +709,7 @@ export const FeedPlaceholderScreen: React.FC = () => {
                           key={i}
                           style={[
                             styles.miniWaveBar,
-                            { height: isPaused ? 4 : (h % 14) + 4 },
+                            { height: (h % 14) + 4 },
                           ]}
                         />
                       ))}
@@ -466,30 +721,21 @@ export const FeedPlaceholderScreen: React.FC = () => {
           }}
         />
       ) : (
-        /* Empty State for Reel Filter */
+        /* Empty State */
         <View style={styles.emptyContainer}>
           <Ionicons name="videocam-off-outline" size={44} color="#94A3B8" />
-          <Text style={styles.emptyTitle}>No practice reels found</Text>
+          <Text style={styles.emptyTitle}>No reels yet</Text>
           <Text style={styles.emptySubtitle}>
-            Try adjusting or clearing your search term.
+            Publish a Short from the + tab and it will appear here.
           </Text>
-          {searchQuery.length > 0 && (
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => setSearchQuery('')}
-              style={styles.resetFilterBtn}
-            >
-              <Text style={styles.resetFilterBtnText}>Clear Search</Text>
-            </TouchableOpacity>
-          )}
         </View>
       )}
 
-      {/* Dual-Type Comment & Critique Modal */}
-      <CritiqueModal
-        visible={!!activeCritiquePost}
-        post={activeCritiquePost}
-        onClose={() => setActiveCritiquePost(null)}
+      {/* Comments-only sheet */}
+      <CommentsSheet
+        visible={!!commentsPost}
+        post={commentsPost}
+        onClose={() => setCommentsPost(null)}
       />
     </View>
   );
@@ -498,7 +744,17 @@ export const FeedPlaceholderScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A',
+    backgroundColor: '#000000',
+  },
+  reelBgVideo: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  reelList: {
+    backgroundColor: 'transparent',
   },
   floatingHeader: {
     position: 'absolute',
@@ -509,6 +765,24 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15, 23, 42, 0.45)',
     paddingHorizontal: spacing.base,
     paddingBottom: spacing.xs,
+  },
+  toast: {
+    position: 'absolute',
+    alignSelf: 'center',
+    zIndex: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(22, 163, 74, 0.95)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
+    maxWidth: '88%',
+  },
+  toastText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
   headerTopRow: {
     flexDirection: 'row',
@@ -611,18 +885,34 @@ const styles = StyleSheet.create({
   reelContainer: {
     width: SCREEN_WIDTH,
     position: 'relative',
-    backgroundColor: '#0F172A',
+    // Transparent so the persistent screen-level video shows through the active reel.
+    backgroundColor: 'transparent',
   },
   reelMediaImage: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     width: '100%',
     height: '100%',
   },
+  reelAudioBg: {
+    backgroundColor: '#1E1B4B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reelVideoBg: {
+    backgroundColor: '#0F172A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   vignetteOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   playPauseTouchArea: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heartOverlay: {
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -688,6 +978,9 @@ const styles = StyleSheet.create({
   },
   dockIconSavedCircle: {
     backgroundColor: 'rgba(245, 158, 11, 0.25)',
+  },
+  dockIconRepostedCircle: {
+    backgroundColor: 'rgba(22, 163, 74, 0.28)',
   },
   mentorMiniBadge: {
     position: 'absolute',

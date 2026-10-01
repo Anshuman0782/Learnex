@@ -16,24 +16,20 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../../context/AppContext';
-import { Avatar, ConfirmModal, CallModal } from '../../components/common';
+import { Avatar, ConfirmModal } from '../../components/common';
 import { EditProfileModal } from '../../components/profile/EditProfileModal';
-import { CertificateModal, CertificateData } from '../../components/profile/CertificateModal';
+import { UploadAnalyticsModal } from '../../components/profile/UploadAnalyticsModal';
+import { FollowListModal } from '../../components/profile/FollowListModal';
+import { AdminPanelModal } from '../../components/admin/AdminPanelModal';
 import { CritiqueModal } from '../../components/community/CritiqueModal';
+import { MusicAnimation } from '../../components/common/NowPlayingBar';
+import { getFeedRequest } from '../../api/posts.api';
+import { getUserProfileRequest, type PublicProfile } from '../../api/social.api';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 import { CommunityPost } from '../../types';
+import { postKind, isMediaPost, postCover, POST_KIND_LABEL, POST_KIND_ICON } from '../../utils/postKind';
 
-type SectionKey =
-  | 'hub'
-  | 'analytics'
-  | 'videos'
-  | 'critiques'
-  | 'goals'
-  | 'mentors'
-  | 'certificates'
-  | 'badges'
-  | 'saved'
-  | 'rewards';
+type SectionKey = 'hub' | 'analytics' | 'uploads' | 'saved' | 'rewards';
 
 interface HubTileItem {
   id: SectionKey;
@@ -63,102 +59,11 @@ const SKILL_METRICS = [
   { name: 'Vibrato Oscillation', score: 78, level: 'Improving', color: '#EC4899', icon: 'pulse' },
 ];
 
-const INITIAL_GOALS = [
-  { id: 'g-1', title: 'Transition smoothly into head mix at C5 note', done: true, tag: 'Vocal Mix' },
-  { id: 'g-2', title: 'Log 20 mins of SOVTE straw exercises daily', done: true, tag: 'Breath Health' },
-  { id: 'g-3', title: 'Record alternate picking speed drill at 120 BPM', done: false, tag: 'Speed Drill' },
-  { id: 'g-4', title: 'Submit chorus take for Mentor review in Circle', done: true, tag: 'Mentorship' },
-];
+interface ProfilePlaceholderScreenProps {
+  onClose?: () => void;
+}
 
-const CERTIFICATES: CertificateData[] = [
-  {
-    id: 'cert-1',
-    title: 'Certified Vocal Technique Level 2',
-    category: 'Vocal Performance',
-    issuer: 'Lernex Vocal Academy & Berklee Standards',
-    mentorName: 'Alex Rivera (Berklee Coach)',
-    studentName: 'Anshuman Sarkar',
-    issueDate: 'Sept 2026',
-    credentialId: 'LRN-VOC-9281',
-    skillsVerified: ['Head Voice Phonation', 'Larynx Stabilisation', 'SOVTE Straw Support'],
-  },
-  {
-    id: 'cert-2',
-    title: 'Pitch Accuracy & Resonance Certification',
-    category: 'Musicianship',
-    issuer: 'Lernex Global Audio Guild',
-    mentorName: 'Sarah Jenkins (Opera Lead)',
-    studentName: 'Anshuman Sarkar',
-    issueDate: 'August 2026',
-    credentialId: 'LRN-PITCH-4402',
-    skillsVerified: ['Forward Resonance', 'Dynamic Vowel Shaping', 'Ear Training'],
-  },
-];
-
-const ACHIEVEMENTS = [
-  {
-    id: 'ach-1',
-    title: 'Top 5% Consistency',
-    desc: 'Practiced 6 consecutive days without breaking streak',
-    icon: 'trophy',
-    color: '#D97706',
-    bgColor: '#FEF3C7',
-    unlocked: true,
-    date: 'Earned Yesterday',
-  },
-  {
-    id: 'ach-2',
-    title: 'Vocal Pitch Pro',
-    desc: 'Hit 95%+ pitch accuracy on Adele chorus take',
-    icon: 'mic',
-    color: '#E11D48',
-    bgColor: '#FFE4E6',
-    unlocked: true,
-    date: 'Earned 3d ago',
-  },
-  {
-    id: 'ach-3',
-    title: 'First Mentor Session',
-    desc: 'Completed 1-on-1 video critique with Berklee Coach',
-    icon: 'star',
-    color: '#7C3AED',
-    bgColor: '#F3E8FF',
-    unlocked: true,
-    date: 'Earned 5d ago',
-  },
-  {
-    id: 'ach-4',
-    title: 'Rising Creator',
-    desc: 'Crossed 1,000+ views across practice reels',
-    icon: 'flame',
-    color: '#EA580C',
-    bgColor: '#FFEDD5',
-    unlocked: true,
-    date: 'Earned 1w ago',
-  },
-  {
-    id: 'ach-5',
-    title: 'Community Supporter',
-    desc: 'Posted 20+ encouraging comments on peer clips',
-    icon: 'heart',
-    color: '#2563EB',
-    bgColor: '#DBEAFE',
-    unlocked: true,
-    date: 'Earned 2w ago',
-  },
-  {
-    id: 'ach-6',
-    title: 'Mastery 30-Day Legend',
-    desc: 'Log 30 days of deliberate skill practice',
-    icon: 'shield-checkmark',
-    color: '#64748B',
-    bgColor: '#F1F5F9',
-    unlocked: false,
-    date: '6/30 Days Logged',
-  },
-];
-
-export const ProfilePlaceholderScreen: React.FC = () => {
+export const ProfilePlaceholderScreen: React.FC<ProfilePlaceholderScreenProps> = ({ onClose }) => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
@@ -170,42 +75,81 @@ export const ProfilePlaceholderScreen: React.FC = () => {
     toggleSavePost,
     openUserProfile,
     openRewardsModal,
+    deletePost,
+    setPostPrivacy,
     logout,
     showDialog,
   } = useApp();
 
   const [activeSection, setActiveSection] = useState<SectionKey>('hub');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [selectedCertificate, setSelectedCertificate] = useState<CertificateData | null>(null);
   const [activePostModal, setActivePostModal] = useState<CommunityPost | null>(null);
-  const [goals, setGoals] = useState(INITIAL_GOALS);
-  const [newGoalTitle, setNewGoalTitle] = useState('');
-  const [newGoalTag, setNewGoalTag] = useState('Technique');
-  const [isAddingGoal, setIsAddingGoal] = useState(false);
   const [isSignOutModalOpen, setIsSignOutModalOpen] = useState(false);
-  const [activeCallMentor, setActiveCallMentor] = useState<{
-    name: string;
-    avatarUrl?: string;
-    role?: string;
-    specialty?: string;
-    type: 'voice' | 'video';
-  } | null>(null);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
 
-  // Dynamic Goal percentage calculation (matching Home page Weekly Goal)
-  const completedGoalsCount = goals.filter((g) => g.done).length;
-  const goalCompletionPercent = goals.length > 0
-    ? Math.round((completedGoalsCount / goals.length) * 100)
-    : 0;
+  // --- My Uploads: the user's own content (video / reels / audio / discussion) ---
+  const [uploads, setUploads] = useState<CommunityPost[]>([]);
+  const [uploadsLoading, setUploadsLoading] = useState(false);
+  const [uploadFilter, setUploadFilter] = useState<'all' | 'video' | 'reel' | 'post' | 'reposts'>('all');
+  const [analyticsPost, setAnalyticsPost] = useState<CommunityPost | null>(null);
+  // Posts the user has reposted — shown in their own account under "Reposts".
+  const [reposts, setReposts] = useState<CommunityPost[]>([]);
+
+  // Real followers/following counts for the current user.
+  const [myProfile, setMyProfile] = useState<PublicProfile | null>(null);
+  const [followList, setFollowList] = useState<'followers' | 'following' | null>(null);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    getUserProfileRequest(user.id).then(setMyProfile).catch(() => {});
+  }, [user?.id]);
+
+  // Refresh follower/following counts whenever this screen regains focus, so a
+  // follow/unfollow done elsewhere is reflected here without a restart.
+  useEffect(() => {
+    const unsub = navigation.addListener('focus', () => {
+      if (user?.id) getUserProfileRequest(user.id).then(setMyProfile).catch(() => {});
+    });
+    return unsub;
+  }, [navigation, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    setUploadsLoading(true);
+    Promise.all([
+      getFeedRequest({ authorId: user.id }),
+      getFeedRequest({ authorId: user.id, shorts: true }),
+    ])
+      .then(([regular, shorts]) => {
+        const map = new Map<string, CommunityPost>();
+        [...regular, ...shorts].forEach((p) => map.set(p.id, p));
+        setUploads(Array.from(map.values()));
+      })
+      .catch(() => setUploads([]))
+      .finally(() => setUploadsLoading(false));
+
+    // Load everything this user has reposted (videos, reels and posts).
+    Promise.all([
+      getFeedRequest({ reposted: true }),
+      getFeedRequest({ reposted: true, shorts: true }),
+    ])
+      .then(([regular, shorts]) => {
+        const map = new Map<string, CommunityPost>();
+        [...regular, ...shorts].forEach((p) => map.set(p.id, p));
+        setReposts(Array.from(map.values()));
+      })
+      .catch(() => setReposts([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, posts.length, activeSection]);
 
   // Return to root main profile page whenever profile tab icon is clicked
   useEffect(() => {
     const unsubscribe = navigation.addListener('tabPress', () => {
       setActiveSection('hub');
       setActivePostModal(null);
-      setSelectedCertificate(null);
+      setAnalyticsPost(null);
       setIsEditModalOpen(false);
       setIsSignOutModalOpen(false);
-      setActiveCallMentor(null);
     });
     return unsubscribe;
   }, [navigation]);
@@ -219,141 +163,101 @@ export const ProfilePlaceholderScreen: React.FC = () => {
 
   const isMentor = selectedRole === 'Mentor';
 
-  // Content Filtering
-  const userPosts = posts.filter(
-    (p) => p.authorName === (user?.name || 'Anshuman Sarkar') || p.id === 'post-video-1'
-  );
-  const userVideos = userPosts.filter((p) => p.postType === 'video' || !!p.videoThumbnail);
-  const userCritiques = posts.filter((p) => (p.mentorCritiqueCount || 0) > 0);
-  const savedPosts = posts.filter((p) => p.isSaved);
+  const isReel = (p: CommunityPost) => !!p.isShort;
+  // Mirrors the composer: Posts (photo / video / audio) · Reels · Discuss (text).
+  const isVideoUpload = (p: CommunityPost) => isMediaPost(p);
+  const isPostUpload = (p: CommunityPost) => postKind(p) === 'discussion';
+
+  const filteredUploads = uploads.filter((p) => {
+    if (uploadFilter === 'all') return true;
+    if (uploadFilter === 'reel') return isReel(p);
+    if (uploadFilter === 'video') return isVideoUpload(p);
+    return isPostUpload(p);
+  });
+
+  const savedPosts = posts.filter((p) => p.isSaved && !p.repostedByName);
+
+  const [uploadBusy, setUploadBusy] = useState(false);
+
+  const handleDeleteUpload = (post: CommunityPost) => {
+    showDialog({
+      title: 'Delete Content',
+      message: 'This permanently removes this content and its stats. This cannot be undone.',
+      icon: 'trash-outline',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        setUploadBusy(true);
+        try {
+          await deletePost(post.id);
+          setUploads((prev) => prev.filter((p) => p.id !== post.id));
+          setAnalyticsPost(null);
+        } catch (e: any) {
+          Alert.alert('Delete failed', e?.message || 'Please try again.');
+        } finally {
+          setUploadBusy(false);
+        }
+      },
+    });
+  };
+
+  const handleTogglePrivacy = async (post: CommunityPost) => {
+    setUploadBusy(true);
+    try {
+      const updated = await setPostPrivacy(post.id, !post.isPrivate);
+      setUploads((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setAnalyticsPost(updated);
+    } catch (e: any) {
+      Alert.alert('Update failed', e?.message || 'Please try again.');
+    } finally {
+      setUploadBusy(false);
+    }
+  };
 
   const hubTiles: HubTileItem[] = [
     {
       id: 'rewards',
-      title: 'Season 3 Rewards & XP',
-      subtitle: 'Dual Rankings, Quests & 6 Perks',
+      title: 'Season Rewards & XP',
+      subtitle: 'Rankings, quests & perks',
       icon: 'trophy',
       color: '#D97706',
       bgColor: '#FEF3C7',
-      badge: 'Rank #4 🏆',
+      badge: '',
     },
     {
       id: 'analytics',
       title: 'Practice Analytics',
-      subtitle: 'Weekly chart & 5 skill meters',
+      subtitle: 'Weekly chart & skill meters',
       icon: 'analytics',
       color: '#4F46E5',
       bgColor: '#EEF2FF',
-      badge: '94% Score',
+      badge: '',
     },
     {
-      id: 'videos',
-      title: 'Practice Takes & Videos',
-      subtitle: 'Your recorded practice library',
-      icon: 'videocam',
+      id: 'uploads',
+      title: 'My Uploads',
+      subtitle: 'Videos, reels & posts + analytics',
+      icon: 'cloud-upload',
       color: '#0284C7',
       bgColor: '#E0F2FE',
-      badge: `${userVideos.length || 2} Videos`,
-    },
-    {
-      id: 'critiques',
-      title: 'Mentor Critiques',
-      subtitle: 'Feedback & video demonstrations',
-      icon: 'star',
-      color: '#7C3AED',
-      bgColor: '#F3E8FF',
-      badge: `${userCritiques.length} Reviews`,
-    },
-    {
-      id: 'goals',
-      title: 'Roadmap & Goals',
-      subtitle: `${goalCompletionPercent}% Milestones Completed`,
-      icon: 'checkmark-done-circle',
-      color: '#15803D',
-      bgColor: '#DCFCE7',
-      badge: `${completedGoalsCount}/${goals.length} (${goalCompletionPercent}%)`,
-    },
-    {
-      id: 'mentors',
-      title: 'My Mentors',
-      subtitle: 'Book 1-on-1, call & message coaches',
-      icon: 'people',
-      color: '#D97706',
-      bgColor: '#FEF3C7',
-      badge: '2 Assigned',
-    },
-    {
-      id: 'certificates',
-      title: 'Verified Certificates',
-      subtitle: 'Berklee standard technical seals',
-      icon: 'ribbon',
-      color: '#B45309',
-      bgColor: '#FFFBEB',
-      badge: `${CERTIFICATES.length} Earned`,
-    },
-    {
-      id: 'badges',
-      title: 'Achievements & Badges',
-      subtitle: 'Consistency & mastery awards',
-      icon: 'trophy',
-      color: '#EA580C',
-      bgColor: '#FFEDD5',
-      badge: '5 Unlocked',
+      badge: `${uploads.length}`,
     },
     {
       id: 'saved',
       title: 'Saved Library',
-      subtitle: 'Bookmarked reels & drills',
+      subtitle: 'Your bookmarked content',
       icon: 'bookmark',
       color: '#475569',
       bgColor: '#F1F5F9',
-      badge: `${savedPosts.length} Takes`,
+      badge: `${savedPosts.length}`,
     },
   ];
-
-  const handleToggleGoal = (goalId: string) => {
-    setGoals((prev) =>
-      prev.map((g) => (g.id === goalId ? { ...g, done: !g.done } : g))
-    );
-  };
-
-  const handleAddGoal = () => {
-    if (!newGoalTitle.trim()) {
-      showDialog({
-        title: 'Milestone Title Required',
-        message: 'Please enter a goal or target description.',
-        icon: 'alert-circle-outline',
-        confirmText: 'OK',
-      });
-      return;
-    }
-    const newGoal = {
-      id: `g-${Date.now()}`,
-      title: newGoalTitle.trim(),
-      tag: newGoalTag,
-      done: false,
-    };
-    setGoals((prev) => [newGoal, ...prev]);
-    setNewGoalTitle('');
-    setIsAddingGoal(false);
-  };
-
-  const handleDeleteGoal = (goalId: string) => {
-    showDialog({
-      title: 'Remove Milestone?',
-      message: 'Are you sure you want to delete this target from your roadmap?',
-      icon: 'trash-outline',
-      isDestructive: true,
-      confirmText: 'Delete',
-      cancelText: 'Keep',
-      onConfirm: () => setGoals((prev) => prev.filter((g) => g.id !== goalId)),
-    });
-  };
 
   const handleShareProfile = async () => {
     try {
       await Share.share({
-        message: `Check out ${user?.name || 'Anshuman'}'s practice profile on Lernex: lernex.app/@${(user?.name || 'user').toLowerCase().replace(/\s+/g, '_')}`,
+        message: `Check out ${user?.name || 'my'} practice profile on Lernex!`,
       });
     } catch {
       showDialog({
@@ -400,10 +304,19 @@ export const ProfilePlaceholderScreen: React.FC = () => {
       >
         {/* Top Floating App Bar */}
         <View style={styles.topBar}>
-          <View style={styles.handleBadge}>
-            <Text style={styles.handleText}>
-              {user?.handle || `@${(user?.name || 'user').toLowerCase().replace(/\s+/g, '_')}`}
-            </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {onClose && (
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={onClose}
+                style={styles.closeHeaderBtn}
+              >
+                <Ionicons name="arrow-back" size={20} color="#0F172A" />
+              </TouchableOpacity>
+            )}
+            <View style={styles.handleBadge}>
+              <Text style={styles.handleText}>{user?.name || 'My Profile'}</Text>
+            </View>
           </View>
 
           <View style={styles.topBarActions}>
@@ -443,7 +356,7 @@ export const ProfilePlaceholderScreen: React.FC = () => {
                   showRing={false}
                 />
                 <View style={styles.levelRingBadge}>
-                  <Text style={styles.levelRingBadgeText}>LVL 3</Text>
+                  <Text style={styles.levelRingBadgeText}>LVL {user?.level ?? 1}</Text>
                 </View>
               </View>
 
@@ -471,7 +384,7 @@ export const ProfilePlaceholderScreen: React.FC = () => {
             {/* Name & Bio */}
             <View style={styles.nameBlock}>
               <View style={styles.nameWithBadgeRow}>
-                <Text style={styles.userNameText}>{user?.name || 'Anshuman Sarkar'}</Text>
+                <Text style={styles.userNameText}>{user?.name || 'Lernex User'}</Text>
                 {isMentor ? (
                   <View style={styles.verifiedMentorBadge}>
                     <Ionicons name="checkmark-circle" size={12} color="#7C3AED" />
@@ -479,31 +392,43 @@ export const ProfilePlaceholderScreen: React.FC = () => {
                   </View>
                 ) : (
                   <View style={styles.learnerVerifiedBadge}>
-                    <Text style={styles.learnerVerifiedBadgeText}>Rising Vocalist</Text>
+                    <Text style={styles.learnerVerifiedBadgeText}>Learner</Text>
                   </View>
                 )}
               </View>
 
-              <Text style={styles.userBioText}>
-                {user?.bio ||
-                  'Vocal student passionate about R&B and pop. Practicing head voice mix and breath control daily!'}
-              </Text>
+              {!!user?.bio && <Text style={styles.userBioText}>{user.bio}</Text>}
 
-              {/* Primary Skill & Track Pill */}
+              {/* Primary Skill Pill */}
               <View style={styles.trackPillsRow}>
                 <View style={styles.skillTrackPill}>
                   <Ionicons name="mic" size={11} color="#4F46E5" />
-                  <Text style={styles.skillTrackPillText}>
-                    {selectedHobby || 'Music'} • Vocal Mastery
-                  </Text>
-                </View>
-                <View style={styles.mentorCountPill}>
-                  <Ionicons name="star" size={11} color="#D97706" />
-                  <Text style={styles.mentorCountPillText}>2 Mentors Assigned</Text>
+                  <Text style={styles.skillTrackPillText}>{selectedHobby || 'Music'}</Text>
                 </View>
               </View>
             </View>
           </View>
+        </View>
+
+        {/* Followers / Following */}
+        <View style={styles.followRow}>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => setFollowList('followers')}
+            style={styles.followCell}
+          >
+            <Text style={styles.followNum}>{myProfile?.followersCount ?? 0}</Text>
+            <Text style={styles.followLabel}>Followers</Text>
+          </TouchableOpacity>
+          <View style={styles.followDivider} />
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => setFollowList('following')}
+            style={styles.followCell}
+          >
+            <Text style={styles.followNum}>{myProfile?.followingCount ?? 0}</Text>
+            <Text style={styles.followLabel}>Following</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Compact 4-Cell Key Stats Summary Strip */}
@@ -513,7 +438,7 @@ export const ProfilePlaceholderScreen: React.FC = () => {
             onPress={() => setActiveSection('analytics')}
             style={styles.summaryCell}
           >
-            <Text style={styles.summaryCellNum}>{user?.streakDays || 6}d 🔥</Text>
+            <Text style={styles.summaryCellNum}>{user?.streakDays ?? 0}d 🔥</Text>
             <Text style={styles.summaryCellLabel}>Streak</Text>
           </TouchableOpacity>
 
@@ -524,34 +449,59 @@ export const ProfilePlaceholderScreen: React.FC = () => {
             onPress={() => setActiveSection('analytics')}
             style={styles.summaryCell}
           >
-            <Text style={styles.summaryCellNum}>{user?.xpPoints || 1240} ⚡</Text>
-            <Text style={styles.summaryCellLabel}>XP Score</Text>
+            <Text style={styles.summaryCellNum}>{user?.seasonXp ?? 0} ⚡</Text>
+            <Text style={styles.summaryCellLabel}>XP this month</Text>
           </TouchableOpacity>
 
           <View style={styles.summaryDivider} />
 
           <TouchableOpacity
             activeOpacity={0.8}
-            onPress={() => setActiveSection('videos')}
+            onPress={() => setActiveSection('uploads')}
             style={styles.summaryCell}
           >
-            <Text style={styles.summaryCellNum}>{userVideos.length || 2} 🎥</Text>
-            <Text style={styles.summaryCellLabel}>Takes</Text>
+            <Text style={styles.summaryCellNum}>{uploads.length} 🎬</Text>
+            <Text style={styles.summaryCellLabel}>Uploads</Text>
           </TouchableOpacity>
 
           <View style={styles.summaryDivider} />
 
           <TouchableOpacity
             activeOpacity={0.8}
-            onPress={() => setActiveSection('critiques')}
+            onPress={() => setActiveSection('saved')}
             style={styles.summaryCell}
           >
             <Text style={[styles.summaryCellNum, { color: '#7C3AED' }]}>
-              {userCritiques.length} ★
+              {savedPosts.length} 🔖
             </Text>
-            <Text style={styles.summaryCellLabel}>Critiques</Text>
+            <Text style={styles.summaryCellLabel}>Saved</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Admin Management — only for users with Admin Panel access */}
+        {user?.isAdmin && (
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => setIsAdminPanelOpen(true)}
+            style={[styles.adminCard, shadows.soft]}
+          >
+            <LinearGradient
+              colors={['#134E4A', '#0F766E']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.adminCardInner}
+            >
+              <View style={styles.adminIcon}>
+                <Ionicons name="shield-checkmark" size={20} color="#0F766E" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.adminTitle}>Admin Management</Text>
+                <Text style={styles.adminSub}>Stats, admins, XP rules & rewards</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#CCFBF1" />
+            </LinearGradient>
+          </TouchableOpacity>
+        )}
 
         {/* ================= SECTION NAVIGATION CONTROLLER ================= */}
         {activeSection !== 'hub' ? (
@@ -643,11 +593,13 @@ export const ProfilePlaceholderScreen: React.FC = () => {
                   <View style={[styles.tileIconBox, { backgroundColor: tile.bgColor }]}>
                     <Ionicons name={tile.icon} size={20} color={tile.color} />
                   </View>
-                  <View style={styles.tileBadgePill}>
-                    <Text style={[styles.tileBadgeText, { color: tile.color }]}>
-                      {tile.badge}
-                    </Text>
-                  </View>
+                  {!!tile.badge && (
+                    <View style={styles.tileBadgePill}>
+                      <Text style={[styles.tileBadgeText, { color: tile.color }]}>
+                        {tile.badge}
+                      </Text>
+                    </View>
+                  )}
                 </View>
 
                 <View style={styles.tileInfo}>
@@ -752,519 +704,174 @@ export const ProfilePlaceholderScreen: React.FC = () => {
           </View>
         )}
 
-        {/* ================= 3. DEDICATED SECTION 2: PRACTICE VIDEOS ================= */}
-        {activeSection === 'videos' && (
+
+        {/* ================= MY UPLOADS: content history + analytics ================= */}
+        {activeSection === 'uploads' && (
           <View style={styles.sectionContainer}>
-            {userVideos.map((post) => (
-              <TouchableOpacity
-                key={post.id}
-                activeOpacity={0.9}
-                onPress={() => setActivePostModal(post)}
-                style={[styles.videoPostCard, shadows.card]}
-              >
-                <View style={styles.videoCardMedia}>
-                  <Image source={{ uri: post.videoThumbnail }} style={styles.videoCardThumb} />
-                  <LinearGradient
-                    colors={['transparent', 'rgba(15, 23, 42, 0.8)']}
-                    style={styles.videoCardGradient}
+            {/* Category filter */}
+            <View style={styles.uploadFilterRow}>
+              {([
+                { key: 'all', label: 'All' },
+                { key: 'video', label: 'Posts' },
+                { key: 'reel', label: 'Reels' },
+                { key: 'post', label: 'Discuss' },
+                { key: 'reposts', label: `Reposts${reposts.length ? ` (${reposts.length})` : ''}` },
+              ] as const).map((f) => {
+                const active = uploadFilter === f.key;
+                return (
+                  <TouchableOpacity
+                    key={f.key}
+                    onPress={() => setUploadFilter(f.key)}
+                    style={[styles.uploadFilterChip, active && styles.uploadFilterChipActive]}
                   >
-                    <View style={styles.durationStamp}>
-                      <Ionicons name="time-outline" size={10} color="#FFFFFF" />
-                      <Text style={styles.durationStampText}>{post.videoDuration || '0:48'}</Text>
-                    </View>
+                    <Text style={[styles.uploadFilterText, active && styles.uploadFilterTextActive]}>
+                      {f.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
-                    <View style={styles.playCenterBtn}>
-                      <Ionicons name="play" size={20} color="#FFFFFF" style={{ marginLeft: 2 }} />
-                    </View>
+            {uploadFilter === 'reposts' ? (
+              reposts.length === 0 ? (
+                <View style={styles.uploadsEmpty}>
+                  <Ionicons name="repeat" size={40} color="#CBD5E1" />
+                  <Text style={styles.uploadsEmptyText}>No reposts yet</Text>
+                  <Text style={styles.uploadsEmptySub}>
+                    Tap the repost icon on any post or reel to share it to your profile.
+                  </Text>
+                </View>
+              ) : (
+                reposts.map((post) => {
+                  const reel = isReel(post);
+                  const audio = post.postType === 'audio' || (!!post.audioUrl && !post.videoUrl);
+                  const kindLabel = POST_KIND_LABEL[postKind(post)];
+                  return (
+                    <TouchableOpacity
+                      key={post.id}
+                      activeOpacity={0.85}
+                      onPress={() => setActivePostModal(post)}
+                      style={[styles.uploadCard, shadows.soft]}
+                    >
+                      <View style={styles.uploadThumb}>
+                        {postCover(post) ? (
+                          <Image source={{ uri: postCover(post) }} style={styles.uploadThumbImg} />
+                        ) : audio ? (
+                          <View style={[styles.uploadThumbImg, styles.uploadThumbAudio]}>
+                            <MusicAnimation active={false} size={44} />
+                          </View>
+                        ) : (
+                          <View style={[styles.uploadThumbImg, styles.uploadThumbFallback]}>
+                            <Ionicons
+                              name={POST_KIND_ICON[postKind(post)] as any}
+                              size={22}
+                              color="#94A3B8"
+                            />
+                          </View>
+                        )}
+                        <View style={[styles.uploadKindBadge, { backgroundColor: 'rgba(22,163,74,0.85)' }]}>
+                          <Ionicons name="repeat" size={9} color="#FFFFFF" />
+                          <Text style={styles.uploadKindText}> {kindLabel}</Text>
+                        </View>
+                      </View>
 
-                    <View style={styles.videoBottomRow}>
-                      <Text style={styles.viewsStamp}>
-                        <Ionicons name="eye-outline" size={11} color="#FFFFFF" /> {post.viewsCount || 1420} views
-                      </Text>
-                      {post.mentorCritiqueCount && (
-                        <View style={styles.critiqueStatusBadge}>
-                          <Ionicons name="star" size={10} color="#FFFFFF" />
-                          <Text style={styles.critiqueStatusText}>Reviewed by Mentor</Text>
+                      <View style={styles.uploadInfo}>
+                        <Text style={styles.uploadTitle} numberOfLines={1}>
+                          {post.videoTitle || post.content || 'Untitled'}
+                        </Text>
+                        <Text style={styles.uploadTime}>Reposted • by {post.authorName}</Text>
+                        <View style={styles.uploadStatsRow}>
+                          <View style={styles.uploadStat}>
+                            <Ionicons name="eye-outline" size={13} color="#64748B" />
+                            <Text style={styles.uploadStatText}>{post.viewsCount ?? 0}</Text>
+                          </View>
+                          <View style={styles.uploadStat}>
+                            <Ionicons name="heart-outline" size={13} color="#64748B" />
+                            <Text style={styles.uploadStatText}>{post.likesCount ?? 0}</Text>
+                          </View>
+                          <View style={styles.uploadStat}>
+                            <Ionicons name="chatbubble-outline" size={13} color="#64748B" />
+                            <Text style={styles.uploadStatText}>{post.commentsCount ?? 0}</Text>
+                          </View>
+                        </View>
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
+                    </TouchableOpacity>
+                  );
+                })
+              )
+            ) : uploadsLoading ? (
+              <View style={styles.uploadsEmpty}>
+                <Text style={styles.uploadsEmptyText}>Loading your uploads…</Text>
+              </View>
+            ) : filteredUploads.length === 0 ? (
+              <View style={styles.uploadsEmpty}>
+                <Ionicons name="cloud-upload-outline" size={40} color="#CBD5E1" />
+                <Text style={styles.uploadsEmptyText}>Nothing here yet</Text>
+                <Text style={styles.uploadsEmptySub}>Content you publish from the + tab shows up here with its analytics.</Text>
+              </View>
+            ) : (
+              filteredUploads.map((post) => {
+                const reel = isReel(post);
+                const audio = post.postType === 'audio' || (!!post.audioUrl && !post.videoUrl);
+                const kindLabel = POST_KIND_LABEL[postKind(post)];
+                return (
+                  <TouchableOpacity
+                    key={post.id}
+                    activeOpacity={0.85}
+                    onPress={() => setAnalyticsPost(post)}
+                    style={[styles.uploadCard, shadows.soft]}
+                  >
+                    <View style={styles.uploadThumb}>
+                      {postCover(post) ? (
+                        <Image source={{ uri: postCover(post) }} style={styles.uploadThumbImg} />
+                      ) : audio ? (
+                        <View style={[styles.uploadThumbImg, styles.uploadThumbAudio]}>
+                          <MusicAnimation active={false} size={44} />
+                        </View>
+                      ) : (
+                        <View style={[styles.uploadThumbImg, styles.uploadThumbFallback]}>
+                          <Ionicons
+                            name={POST_KIND_ICON[postKind(post)] as any}
+                            size={22}
+                            color="#94A3B8"
+                          />
                         </View>
                       )}
-                    </View>
-                  </LinearGradient>
-                </View>
-
-                <View style={styles.videoCardFooter}>
-                  <Text style={styles.videoCardTitle} numberOfLines={1}>
-                    {post.videoTitle || post.content}
-                  </Text>
-                  <Text style={styles.videoCardSub}>{post.communityName} • {post.timeAgo}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* ================= 4. DEDICATED SECTION 3: MENTOR CRITIQUES ================= */}
-        {activeSection === 'critiques' && (
-          <View style={styles.sectionContainer}>
-            {userCritiques.map((post) => {
-              const critique = post.comments?.find((c) => c.isMentorCritique);
-              if (!critique) return null;
-
-              return (
-                <TouchableOpacity
-                  key={post.id}
-                  activeOpacity={0.88}
-                  onPress={() => setActivePostModal(post)}
-                  style={[styles.critiqueCard, shadows.soft]}
-                >
-                  <View style={styles.critiqueCardHeader}>
-                    <View style={styles.critiqueMentorIdentity}>
-                      <Avatar uri={critique.authorAvatar} name={critique.authorName} size={36} showRing />
-                      <View style={{ marginLeft: 8 }}>
-                        <Text style={styles.critiqueMentorName}>{critique.authorName}</Text>
-                        <Text style={styles.critiqueMentorBadge}>Verified Vocal & Music Coach</Text>
+                      <View style={styles.uploadKindBadge}>
+                        <Text style={styles.uploadKindText}>{kindLabel}</Text>
                       </View>
                     </View>
 
-                    <View style={styles.critiqueRatingPill}>
-                      <Ionicons name="star" size={11} color="#D97706" />
-                      <Text style={styles.critiqueRatingText}>{critique.mentorRating || 5}.0 ★</Text>
-                    </View>
-                  </View>
-
-                  <Text style={styles.critiqueFocusTag}>
-                    Focus: {critique.critiqueFocus || 'Larynx Drop & Breath Support'}
-                  </Text>
-                  <Text style={styles.critiqueBodyText} numberOfLines={2}>
-                    "{critique.text}"
-                  </Text>
-
-                  {critique.videoCritiqueThumbnail && (
-                    <View style={styles.critiqueDemoPill}>
-                      <Ionicons name="videocam" size={13} color="#7C3AED" />
-                      <Text style={styles.critiqueDemoText}>
-                        Video Fix Attached ({critique.videoCritiqueDuration || '1:15'}) • Tap to Watch
+                    <View style={styles.uploadInfo}>
+                      <Text style={styles.uploadTitle} numberOfLines={1}>
+                        {post.videoTitle || post.content || 'Untitled'}
                       </Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
-
-        {/* ================= 5. DEDICATED SECTION 4: ROADMAP & GOALS ================= */}
-        {activeSection === 'goals' && (
-          <View style={styles.sectionContainer}>
-            {/* Target & Weekly Goal Card with Visual Glow (Matches Home Page Weekly Goal) */}
-            <View style={[styles.targetGoalCard, shadows.soft]}>
-              <View style={styles.targetCardHeader}>
-                <View style={styles.targetTitleRow}>
-                  <View style={styles.targetIconBox}>
-                    <Ionicons name="flag" size={15} color="#4F46E5" />
-                  </View>
-                  <View>
-                    <Text style={styles.targetTitle}>Weekly Goal & Roadmap</Text>
-                    <Text style={styles.targetSubTitle}>Target completion reflects real practice</Text>
-                  </View>
-                </View>
-                <View style={styles.targetPercentBadge}>
-                  <Text style={styles.targetPercentText}>{goalCompletionPercent}%</Text>
-                </View>
-              </View>
-
-              {/* Dynamic Gradient Progress Bar Track */}
-              <View style={styles.progressBlock}>
-                <View style={styles.progressBarTrack}>
-                  <LinearGradient
-                    colors={['#4F46E5', '#8B5CF6', '#EC4899']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={[styles.progressBarFill, { width: `${Math.min(goalCompletionPercent, 100)}%` }]}
-                  />
-                </View>
-                <View style={styles.progressLabelRow}>
-                  <View style={styles.miniStatItem}>
-                    <Ionicons name="checkmark-circle" size={13} color="#10B981" />
-                    <Text style={styles.progressLabel}>
-                      {completedGoalsCount}/{goals.length} Milestones Done
-                    </Text>
-                  </View>
-                  <View style={styles.miniStatItem}>
-                    <Ionicons name="sparkles" size={12} color="#6366F1" />
-                    <Text style={styles.progressLabel}>
-                      {goalCompletionPercent === 100 ? 'All Complete! 🎉' : `${100 - goalCompletionPercent}% Remaining`}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            </View>
-
-            {/* Add Custom Target or Goal Card */}
-            <View style={[styles.addGoalCard, shadows.soft]}>
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => setIsAddingGoal(!isAddingGoal)}
-                style={styles.addGoalToggleHeader}
-              >
-                <View style={styles.addGoalHeaderLeft}>
-                  <View style={styles.plusIconCircle}>
-                    <Ionicons name={isAddingGoal ? 'close' : 'add'} size={18} color="#4F46E5" />
-                  </View>
-                  <Text style={styles.addGoalHeaderTitle}>
-                    {isAddingGoal ? 'Cancel Adding Milestone' : 'Set Your Own Target or Goal'}
-                  </Text>
-                </View>
-                <Ionicons
-                  name={isAddingGoal ? 'chevron-up' : 'chevron-down'}
-                  size={16}
-                  color="#64748B"
-                />
-              </TouchableOpacity>
-
-              {isAddingGoal && (
-                <View style={styles.addGoalForm}>
-                  <Text style={styles.addGoalInputLabel}>Milestone Description</Text>
-                  <TextInput
-                    value={newGoalTitle}
-                    onChangeText={setNewGoalTitle}
-                    placeholder="e.g. Master C5 mixed voice transition at 120 BPM"
-                    placeholderTextColor="#94A3B8"
-                    style={styles.addGoalInput}
-                  />
-
-                  <Text style={styles.addGoalInputLabel}>Category / Focus Tag</Text>
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.goalTagScroll}
-                  >
-                    {['Vocal Mix', 'Breath Health', 'Speed Drill', 'Mentorship', 'Repertoire', 'Theory'].map(
-                      (tag) => {
-                        const isSelected = newGoalTag === tag;
-                        return (
-                          <TouchableOpacity
-                            key={tag}
-                            activeOpacity={0.8}
-                            onPress={() => setNewGoalTag(tag)}
-                            style={[styles.goalTagOption, isSelected && styles.goalTagOptionActive]}
-                          >
-                            <Text
-                              style={[
-                                styles.goalTagOptionText,
-                                isSelected && styles.goalTagOptionTextActive,
-                              ]}
-                            >
-                              {tag}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      }
-                    )}
-                  </ScrollView>
-
-                  <TouchableOpacity
-                    activeOpacity={0.88}
-                    onPress={handleAddGoal}
-                    style={styles.addGoalSubmitBtn}
-                  >
-                    <LinearGradient
-                      colors={['#4F46E5', '#7C3AED']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={styles.addGoalSubmitGradient}
-                    >
-                      <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />
-                      <Text style={styles.addGoalSubmitText}>Add Target & Recalculate %</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-
-            {/* Deliberate Practice Milestones List */}
-            <View style={[styles.goalsCard, shadows.soft]}>
-              <View style={styles.goalsHeaderRow}>
-                <View style={styles.goalsTitleGroup}>
-                  <Ionicons name="checkmark-done-circle" size={18} color="#15803D" />
-                  <Text style={styles.goalsTitle}>Your Roadmap Milestones</Text>
-                </View>
-                <Text style={styles.goalsRatio}>
-                  {completedGoalsCount}/{goals.length} Completed
-                </Text>
-              </View>
-
-              <View style={styles.goalsList}>
-                {goals.map((g) => (
-                  <View
-                    key={g.id}
-                    style={[styles.goalItem, g.done && styles.goalItemDone]}
-                  >
-                    <TouchableOpacity
-                      activeOpacity={0.8}
-                      onPress={() => handleToggleGoal(g.id)}
-                      style={styles.goalItemTouchContent}
-                    >
-                      <View style={[styles.goalCheckbox, g.done && styles.goalCheckboxDone]}>
-                        {g.done && <Ionicons name="checkmark" size={12} color="#FFFFFF" />}
+                      <Text style={styles.uploadTime}>{post.timeAgo}{post.isPrivate ? ' • Private' : ''}</Text>
+                      <View style={styles.uploadStatsRow}>
+                        <View style={styles.uploadStat}>
+                          <Ionicons name="eye-outline" size={13} color="#64748B" />
+                          <Text style={styles.uploadStatText}>{post.viewsCount ?? 0}</Text>
+                        </View>
+                        <View style={styles.uploadStat}>
+                          <Ionicons name="heart-outline" size={13} color="#64748B" />
+                          <Text style={styles.uploadStatText}>{post.likesCount ?? 0}</Text>
+                        </View>
+                        <View style={styles.uploadStat}>
+                          <Ionicons name="chatbubble-outline" size={13} color="#64748B" />
+                          <Text style={styles.uploadStatText}>{post.commentsCount ?? 0}</Text>
+                        </View>
+                        <View style={styles.uploadStat}>
+                          <Ionicons name="repeat" size={13} color="#64748B" />
+                          <Text style={styles.uploadStatText}>{post.repostsCount ?? 0}</Text>
+                        </View>
                       </View>
-                      <Text style={[styles.goalItemText, g.done && styles.goalItemTextDone]}>
-                        {g.title}
-                      </Text>
-                    </TouchableOpacity>
-
-                    <View style={styles.goalItemRightActions}>
-                      <View style={styles.goalTagPill}>
-                        <Text style={styles.goalTagText}>{g.tag}</Text>
-                      </View>
-                      <TouchableOpacity
-                        activeOpacity={0.7}
-                        onPress={() => handleDeleteGoal(g.id)}
-                        style={styles.goalDeleteBtn}
-                      >
-                        <Ionicons name="trash-outline" size={14} color="#94A3B8" />
-                      </TouchableOpacity>
                     </View>
-                  </View>
-                ))}
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* ================= 6. DEDICATED SECTION 5: MY MENTORS ================= */}
-        {activeSection === 'mentors' && (
-          <View style={styles.sectionContainer}>
-            {/* Mentor 1: Alex Rivera */}
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() =>
-                openUserProfile({
-                  name: 'Alex Rivera',
-                  avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
-                  role: 'Mentor',
-                  badge: 'Berklee Vocal Coach',
-                  specialty: 'Head Voice & Pitch Fix',
-                  rating: 4.9,
-                  critiquesGiven: 245,
-                })
-              }
-              style={[styles.coachDetailCard, shadows.soft]}
-            >
-              <Avatar uri="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150" name="Alex Rivera" size={50} showRing />
-              <View style={styles.coachDetailInfo}>
-                <View style={styles.coachDetailHeaderRow}>
-                  <Text style={styles.coachName}>Alex Rivera ★</Text>
-                  <View style={styles.ratingBadge}>
-                    <Text style={styles.ratingBadgeText}>4.9 ★</Text>
-                  </View>
-                </View>
-                <Text style={styles.coachTitle}>Berklee Certified Vocal Coach</Text>
-                <Text style={styles.coachDetailBio}>
-                  "Specialized in head voice oscillation, SOVTE exercises, and healthy belting without vocal strain."
-                </Text>
-                <View style={styles.coachActionsRow}>
-                  {/* Video Call Trigger */}
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      setActiveCallMentor({
-                        name: 'Alex Rivera',
-                        avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
-                        role: 'Mentor',
-                        specialty: 'Berklee Vocal Coach',
-                        type: 'video',
-                      });
-                    }}
-                    style={styles.coachCallActionBtn}
-                  >
-                    <Ionicons name="videocam" size={13} color="#FFFFFF" />
-                    <Text style={styles.coachCallActionText}>Video</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
                   </TouchableOpacity>
-
-                  {/* Voice Call Trigger */}
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      setActiveCallMentor({
-                        name: 'Alex Rivera',
-                        avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
-                        role: 'Mentor',
-                        specialty: 'Berklee Vocal Coach',
-                        type: 'voice',
-                      });
-                    }}
-                    style={styles.coachVoiceActionBtn}
-                  >
-                    <Ionicons name="call" size={12} color="#4F46E5" />
-                    <Text style={styles.coachVoiceActionText}>Voice</Text>
-                  </TouchableOpacity>
-
-                  <View style={styles.coachActionBtn}>
-                    <Ionicons name="calendar-outline" size={13} color="#4F46E5" />
-                    <Text style={styles.coachActionBtnText}>Book</Text>
-                  </View>
-                  <View style={styles.coachActionBtnOutline}>
-                    <Ionicons name="chatbubble-outline" size={13} color="#64748B" />
-                    <Text style={styles.coachActionBtnOutlineText}>Chat</Text>
-                  </View>
-                </View>
-              </View>
-            </TouchableOpacity>
-
-            {/* Mentor 2: Sarah Jenkins */}
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() =>
-                openUserProfile({
-                  name: 'Sarah Jenkins',
-                  avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-                  role: 'Mentor',
-                  badge: 'Opera & Vocal Health Lead',
-                  specialty: 'Breath Support & Belting',
-                  rating: 4.8,
-                  critiquesGiven: 189,
-                })
-              }
-              style={[styles.coachDetailCard, shadows.soft]}
-            >
-              <Avatar uri="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150" name="Sarah Jenkins" size={50} showRing />
-              <View style={styles.coachDetailInfo}>
-                <View style={styles.coachDetailHeaderRow}>
-                  <Text style={styles.coachName}>Sarah Jenkins ★</Text>
-                  <View style={styles.ratingBadge}>
-                    <Text style={styles.ratingBadgeText}>4.8 ★</Text>
-                  </View>
-                </View>
-                <Text style={styles.coachTitle}>Opera & Vocal Health Lead</Text>
-                <Text style={styles.coachDetailBio}>
-                  "Focused on forward resonance, dynamic vowel shaping, and diaphragmatic breath support."
-                </Text>
-                <View style={styles.coachActionsRow}>
-                  {/* Video Call Trigger */}
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      setActiveCallMentor({
-                        name: 'Sarah Jenkins',
-                        avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-                        role: 'Mentor',
-                        specialty: 'Opera & Vocal Coach',
-                        type: 'video',
-                      });
-                    }}
-                    style={styles.coachCallActionBtn}
-                  >
-                    <Ionicons name="videocam" size={13} color="#FFFFFF" />
-                    <Text style={styles.coachCallActionText}>Video</Text>
-                  </TouchableOpacity>
-
-                  {/* Voice Call Trigger */}
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      setActiveCallMentor({
-                        name: 'Sarah Jenkins',
-                        avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-                        role: 'Mentor',
-                        specialty: 'Opera & Vocal Coach',
-                        type: 'voice',
-                      });
-                    }}
-                    style={styles.coachVoiceActionBtn}
-                  >
-                    <Ionicons name="call" size={12} color="#4F46E5" />
-                    <Text style={styles.coachVoiceActionText}>Voice</Text>
-                  </TouchableOpacity>
-
-                  <View style={styles.coachActionBtn}>
-                    <Ionicons name="calendar-outline" size={13} color="#4F46E5" />
-                    <Text style={styles.coachActionBtnText}>Book</Text>
-                  </View>
-                  <View style={styles.coachActionBtnOutline}>
-                    <Ionicons name="chatbubble-outline" size={13} color="#64748B" />
-                    <Text style={styles.coachActionBtnOutlineText}>Chat</Text>
-                  </View>
-                </View>
-              </View>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* ================= 7. DEDICATED SECTION 6: VERIFIED CERTIFICATES ================= */}
-        {activeSection === 'certificates' && (
-          <View style={styles.sectionContainer}>
-            {CERTIFICATES.map((cert) => (
-              <TouchableOpacity
-                key={cert.id}
-                activeOpacity={0.88}
-                onPress={() => setSelectedCertificate(cert)}
-                style={[styles.certRowCard, shadows.soft]}
-              >
-                <LinearGradient
-                  colors={['#FEF3C7', '#FDE68A']}
-                  style={styles.certIconBox}
-                >
-                  <Ionicons name="ribbon" size={22} color="#B45309" />
-                </LinearGradient>
-
-                <View style={styles.certRowInfo}>
-                  <Text style={styles.certRowTitle}>{cert.title}</Text>
-                  <Text style={styles.certRowIssuer}>{cert.issuer} • {cert.issueDate}</Text>
-                  <Text style={styles.certRowId}>Verified ID: {cert.credentialId}</Text>
-                </View>
-
-                <View style={styles.certViewBadge}>
-                  <Text style={styles.certViewBadgeText}>View Seal</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {/* ================= 8. DEDICATED SECTION 7: ACHIEVEMENTS & BADGES ================= */}
-        {activeSection === 'badges' && (
-          <View style={styles.sectionContainer}>
-            {ACHIEVEMENTS.map((ach) => (
-              <View
-                key={ach.id}
-                style={[
-                  styles.achievementCard,
-                  shadows.soft,
-                  !ach.unlocked && styles.achievementCardLocked,
-                ]}
-              >
-                <View style={[styles.achIconBox, { backgroundColor: ach.bgColor }]}>
-                  <Ionicons
-                    name={ach.icon as keyof typeof Ionicons.glyphMap}
-                    size={22}
-                    color={ach.color}
-                  />
-                </View>
-                <View style={styles.achInfo}>
-                  <Text style={styles.achTitle}>{ach.title}</Text>
-                  <Text style={styles.achDesc}>{ach.desc}</Text>
-                  <View style={styles.achStatusRow}>
-                    <Ionicons
-                      name={ach.unlocked ? 'checkmark-circle' : 'lock-closed'}
-                      size={11}
-                      color={ach.unlocked ? '#15803D' : '#94A3B8'}
-                    />
-                    <Text
-                      style={[
-                        styles.achStatusText,
-                        ach.unlocked && { color: '#15803D', fontWeight: 'bold' },
-                      ]}
-                    >
-                      {ach.date}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            ))}
+                );
+              })
+            )}
           </View>
         )}
 
@@ -1279,7 +886,7 @@ export const ProfilePlaceholderScreen: React.FC = () => {
                   onPress={() => setActivePostModal(post)}
                   style={[styles.savedCard, shadows.soft]}
                 >
-                  <Image source={{ uri: post.videoThumbnail }} style={styles.savedCardThumb} />
+                  <Image source={{ uri: postCover(post) }} style={styles.savedCardThumb} />
                   <View style={styles.savedCardInfo}>
                     <Text style={styles.savedCardTitle} numberOfLines={1}>
                       {post.videoTitle || post.content}
@@ -1333,11 +940,21 @@ export const ProfilePlaceholderScreen: React.FC = () => {
         onClose={() => setIsEditModalOpen(false)}
       />
 
-      {/* Verified Certificate Viewer Modal */}
-      <CertificateModal
-        visible={!!selectedCertificate}
-        certificate={selectedCertificate}
-        onClose={() => setSelectedCertificate(null)}
+      {/* Single-upload analytics sheet */}
+      <UploadAnalyticsModal
+        post={analyticsPost}
+        onClose={() => setAnalyticsPost(null)}
+        onDelete={handleDeleteUpload}
+        onTogglePrivacy={handleTogglePrivacy}
+        busy={uploadBusy}
+      />
+
+      {/* Followers / Following list */}
+      <FollowListModal
+        visible={!!followList}
+        userId={user?.id ?? null}
+        mode={followList ?? 'followers'}
+        onClose={() => setFollowList(null)}
       />
 
       {/* Post & Critique Inspection Modal */}
@@ -1346,6 +963,11 @@ export const ProfilePlaceholderScreen: React.FC = () => {
         post={activePostModal}
         onClose={() => setActivePostModal(null)}
       />
+
+      {/* Admin Panel (admins only; the server re-checks access on every call) */}
+      {user?.isAdmin && (
+        <AdminPanelModal visible={isAdminPanelOpen} onClose={() => setIsAdminPanelOpen(false)} />
+      )}
 
       {/* Improved Sign Out Custom Popup Modal */}
       <ConfirmModal
@@ -1360,13 +982,6 @@ export const ProfilePlaceholderScreen: React.FC = () => {
         onConfirm={handleConfirmSignOut}
       />
 
-      {/* Direct Mentor Voice & Video Call Modal */}
-      <CallModal
-        visible={!!activeCallMentor}
-        user={activeCallMentor}
-        callType={activeCallMentor?.type || 'voice'}
-        onClose={() => setActiveCallMentor(null)}
-      />
     </View>
   );
 };
@@ -1584,6 +1199,64 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#D97706',
   },
+  followRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: '#EEF2F7',
+    paddingVertical: spacing.sm + 2,
+    marginBottom: spacing.sm,
+  },
+  followCell: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  followNum: {
+    fontSize: 18,
+    fontWeight: typography.weights.bold,
+    color: '#0F172A',
+  },
+  followLabel: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  followDivider: {
+    width: 1,
+    height: 28,
+    backgroundColor: '#E2E8F0',
+  },
+  adminCard: {
+    borderRadius: borderRadius.xl,
+    overflow: 'hidden',
+  },
+  adminCardInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: spacing.md,
+  },
+  adminIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#CCFBF1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  adminTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  adminSub: {
+    fontSize: 11,
+    color: '#99F6E4',
+    marginTop: 1,
+  },
   compactSummaryStrip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1754,6 +1427,121 @@ const styles = StyleSheet.create({
   sectionContainer: {
     gap: spacing.sm + 2,
   },
+  // My Uploads
+  uploadFilterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 4,
+  },
+  uploadFilterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: borderRadius.full,
+    backgroundColor: '#F1F5F9',
+  },
+  uploadFilterChipActive: {
+    backgroundColor: '#0284C7',
+  },
+  uploadFilterText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  uploadFilterTextActive: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+  },
+  uploadsEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 44,
+    gap: 8,
+  },
+  uploadsEmptyText: {
+    fontSize: 14,
+    fontWeight: typography.weights.bold,
+    color: '#334155',
+  },
+  uploadsEmptySub: {
+    fontSize: 12,
+    color: '#94A3B8',
+    textAlign: 'center',
+    paddingHorizontal: 24,
+    lineHeight: 17,
+  },
+  uploadCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: borderRadius.xl,
+    padding: spacing.sm + 2,
+    borderWidth: 1,
+    borderColor: '#EEF2F7',
+  },
+  uploadThumb: {
+    width: 68,
+    height: 68,
+    borderRadius: 12,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  uploadThumbImg: {
+    width: 68,
+    height: 68,
+  },
+  uploadThumbAudio: {
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadThumbFallback: {
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  uploadKindBadge: {
+    position: 'absolute',
+    bottom: 3,
+    left: 3,
+    backgroundColor: 'rgba(15,23,42,0.75)',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: borderRadius.full,
+  },
+  uploadKindText: {
+    fontSize: 8,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  uploadInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  uploadTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  uploadTime: {
+    fontSize: 11,
+    color: '#94A3B8',
+  },
+  uploadStatsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 4,
+  },
+  uploadStat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  uploadStatText: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '600',
+  },
   chartCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: borderRadius.xl,
@@ -1923,7 +1711,7 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   videoCardGradient: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'space-between',
     padding: spacing.sm,
   },
@@ -2353,6 +2141,24 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#64748B',
   },
+  emptyMentorsBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+    gap: 8,
+  },
+  emptyMentorsTitle: {
+    fontSize: 15,
+    fontWeight: typography.weights.bold,
+    color: '#334155',
+  },
+  emptyMentorsSub: {
+    fontSize: 12,
+    color: '#94A3B8',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
   coachDetailCard: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
@@ -2611,5 +2417,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: 'bold',
     color: '#EF4444',
+  },
+  closeHeaderBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

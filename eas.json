@@ -12,12 +12,19 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lernex-api.onrender.com"
       }
     },
     "production": {
       "android": {
         "buildType": "apk"
-      }
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lernex-api.onrender.com"
+      },
+      "autoIncrement": true
     }
   },
   "submit": {

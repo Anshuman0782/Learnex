@@ -22,14 +22,15 @@ export const PersonalStatsDashboard: React.FC<PersonalStatsDashboardProps> = ({
   onExploreMorePress,
   onAnalyticsPress,
 }) => {
-  const { user, selectedRole } = useApp();
+  const { user, selectedRole, userStats } = useApp();
   const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
 
-  const stats = DEFAULT_USER_STATS;
-  const targetPercent = Math.min(
-    Math.round((stats.completedTargetSessions / stats.weeklyTargetSessions) * 100),
-    100
-  );
+  // Real stats from the backend; fall back to a zeroed shape while loading.
+  const stats = userStats ?? DEFAULT_USER_STATS;
+  const targetPercent =
+    stats.weeklyTargetSessions > 0
+      ? Math.min(Math.round((stats.completedTargetSessions / stats.weeklyTargetSessions) * 100), 100)
+      : 0;
 
   return (
     <View style={styles.container}>
@@ -104,8 +105,10 @@ export const PersonalStatsDashboard: React.FC<PersonalStatsDashboardProps> = ({
           <View style={[styles.metricIconCircle, { backgroundColor: '#DCFCE7' }]}>
             <Ionicons name="trending-up" size={16} color="#15803D" />
           </View>
-          <Text style={styles.metricBigValue}>+{stats.accuracyRate - 70}%</Text>
-          <Text style={styles.metricTitle}>Technique</Text>
+          <Text style={styles.metricBigValue}>
+            {stats.accuracyRate > 0 ? `${stats.accuracyRate}%` : '—'}
+          </Text>
+          <Text style={styles.metricTitle}>Accuracy</Text>
         </View>
 
         {/* Metric 2 */}
@@ -136,7 +139,7 @@ export const PersonalStatsDashboard: React.FC<PersonalStatsDashboardProps> = ({
           </View>
           <View style={styles.xpPill}>
             <Ionicons name="sparkles" size={11} color="#4F46E5" />
-            <Text style={styles.xpText}>{user?.xpPoints || stats.xpPoints} XP</Text>
+            <Text style={styles.xpText}>{stats.xpPoints} XP</Text>
           </View>
         </View>
 
@@ -190,7 +193,7 @@ export const PersonalStatsDashboard: React.FC<PersonalStatsDashboardProps> = ({
               </View>
               <View style={styles.previewRow}>
                 <Text style={styles.previewLabel}>Total XP Points</Text>
-                <Text style={styles.previewValue}>{user?.xpPoints || stats.xpPoints} XP</Text>
+                <Text style={styles.previewValue}>{stats.xpPoints} XP</Text>
               </View>
               <View style={styles.previewRow}>
                 <Text style={styles.previewLabel}>Technique Growth</Text>

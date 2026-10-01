@@ -1,26 +1,42 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
   Alert,
+  Image,
+  TextInput,
+  Dimensions,
 } from 'react-native';
+import { useVideoPlayer } from 'expo-video';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../../context/AppContext';
 import { PostCard } from '../../components/home/PostCard';
 import { CritiqueModal } from '../../components/community/CritiqueModal';
-import { CreatePostModal } from '../../components/community/CreatePostModal';
+import { CircleReelCard } from '../../components/community/CircleReelCard';
+import { ReelViewerModal } from '../../components/common/ReelViewerModal';
+import { getFeedRequest } from '../../api/posts.api';
+import { CreateCircleModal } from '../../components/community/CreateCircleModal';
+import { CircleSettingsModal } from '../../components/community/CircleSettingsModal';
 import { CommunityDetailsModal } from '../../components/community/CommunityDetailsModal';
-import { CommunityEventsSection } from '../../components/community/CommunityEventsSection';
+import { CommunityEventsSection, EventCard } from '../../components/community/CommunityEventsSection';
 import { CommunityEventModal } from '../../components/community/CommunityEventModal';
+import { Avatar } from '../../components/common/Avatar';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
+import { circleTheme } from '../../theme/circleTheme';
 import { Community, CommunityPost, CommunityEvent } from '../../types';
+import { postKind } from '../../utils/postKind';
+
+// Circle section theme (distinct from Home's indigo).
+const CIRCLE_ACCENT = circleTheme.accent;
+const CIRCLE_ACCENT_DARK = circleTheme.accentDark;
+const CIRCLE_ACCENT_LIGHT = circleTheme.accentLight;
+const CIRCLE_BG = circleTheme.bg;
 
 export const CommunityScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -28,11 +44,12 @@ export const CommunityScreen: React.FC = () => {
   const {
     user,
     selectedRole,
-    setRole,
     joinedCommunities,
     posts,
+    reels,
     communityEvents,
-    toggleLikePost,
+    playAudioPost,
+    closeAudioPost,
     toggleCommunityJoin,
     getJoinedCommunityObjects,
     getRecommendedCommunities,
@@ -41,14 +58,42 @@ export const CommunityScreen: React.FC = () => {
   const joinedCommunityObjects = getJoinedCommunityObjects();
   const recommendedCommunities = getRecommendedCommunities();
 
+  // Categories are derived from the circles that actually exist — so the filter
+  // chips always match real data (nothing hardcoded) and only show available ones.
+  const availableCategories = React.useMemo(() => {
+    const set = new Set<string>();
+    [...joinedCommunityObjects, ...recommendedCommunities].forEach((c) => {
+      if (c.category && c.category.trim()) set.add(c.category.trim());
+    });
+    return ['All', ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedCommunityObjects.length, recommendedCommunities.length]);
+
   const [activeCommunity, setActiveCommunity] = useState<Community | null>(null);
   const [activeCritiquePost, setActiveCritiquePost] = useState<CommunityPost | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<CommunityEvent | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isCreateCircleOpen, setIsCreateCircleOpen] = useState(false);
+  const [settingsCommunity, setSettingsCommunity] = useState<Community | null>(null);
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [roomTab, setRoomTab] = useState<'feed' | 'events'>('feed');
   const [feedFilter, setFeedFilter] = useState<'all' | 'video' | 'text' | 'reviewed'>('all');
   const [communityCategoryFilter, setCommunityCategoryFilter] = useState('All');
+  const [circleSearch, setCircleSearch] = useState('');
+
+  // Deep link from Home: open a specific circle room (circles row / event card).
+  const route = useRoute<any>();
+  const openCircleId: string | undefined = route.params?.openCircleId;
+  useEffect(() => {
+    if (!openCircleId) return;
+    const c = joinedCommunityObjects.find((x) => x.id === openCircleId);
+    if (c) {
+      setActiveCommunity(c);
+      setRoomTab('feed');
+    }
+    navigation.setParams({ openCircleId: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openCircleId]);
 
   // Return to root community hub whenever Community tab icon is clicked
   useEffect(() => {
@@ -70,19 +115,150 @@ export const CommunityScreen: React.FC = () => {
     ? communityEvents.filter((e) => e.communityId === activeCommunity.id)
     : [];
 
-  // Filter posts for the selected community room (both public & circle-private posts)
-  const communityPosts = activeCommunity
-    ? posts.filter((p) => {
-        const matchesCommunity =
-          p.communityId === activeCommunity.id ||
-          (p.communityIds && p.communityIds.includes(activeCommunity.id));
-        if (!matchesCommunity) return false;
-        if (feedFilter === 'video') return p.postType === 'video' || !!p.videoThumbnail;
-        if (feedFilter === 'text') return p.postType === 'text' && !p.videoThumbnail;
-        if (feedFilter === 'reviewed') return (p.mentorCritiqueCount || 0) > 0;
-        return true;
-      })
-    : [];
+  // ---- Circle room feed ----
+  // Loaded from the server for this circle (posts AND reels — the Home feed
+  // excludes reels, so filtering it would hide reels tagged to the circle).
+  const [roomFeed, setRoomFeed] = useState<CommunityPost[]>([]);
+  const [reelViewer, setReelViewer] = useState<{ reels: CommunityPost[]; index: number } | null>(null);
+
+  useEffect(() => {
+    if (!activeCommunity) {
+      setRoomFeed([]);
+      return;
+    }
+    let active = true;
+    getFeedRequest({ communityId: activeCommunity.id })
+      .then((rows) => active && setRoomFeed(rows))
+      .catch(() => active && setRoomFeed([]));
+    return () => {
+      active = false;
+    };
+    // Re-sync when posts are created/deleted anywhere in the app.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCommunity?.id, posts.length, reels.length]);
+
+  // Prefer the live copy from the app feeds so likes/comments update instantly.
+  const fresh = (p: CommunityPost) =>
+    posts.find((x) => x.id === p.id && !x.repostedByName) ?? reels.find((x) => x.id === p.id) ?? p;
+  const roomItems = roomFeed.map(fresh);
+
+  const communityPosts = roomItems.filter((p) => {
+    if (feedFilter === 'video') return postKind(p) !== 'discussion';
+    if (feedFilter === 'text') return postKind(p) === 'discussion';
+    if (feedFilter === 'reviewed') return (p.mentorCritiqueCount || 0) > 0;
+    return true;
+  });
+  const roomReels = communityPosts.filter((p) => p.isShort);
+
+  // ---- Home-style autoplay for the circle feed ----
+  // One shared player; the video card most visible on screen plays (muted).
+  const player = useVideoPlayer(null, (p) => {
+    p.loop = true;
+  });
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+  const [videoStarted, setVideoStarted] = useState(false);
+  const [feedMuted, setFeedMuted] = useState(true);
+  const cardRefs = useRef(new Map<string, View>());
+  const playDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPickRef = useRef(0);
+  const videoIdsKey = communityPosts
+    .filter((p) => !p.isShort && !!p.videoUrl && p.postType !== 'audio')
+    .map((p) => p.id)
+    .join(',');
+
+  /** Pick the video card that is at least 60% visible (the most visible wins). */
+  const pickActiveVideo = useCallback(() => {
+    const ids = videoIdsKey ? videoIdsKey.split(',').filter((id) => cardRefs.current.has(id)) : [];
+    if (ids.length === 0) {
+      setActiveVideoId(null);
+      return;
+    }
+    const screenH = Dimensions.get('window').height;
+    let bestId: string | null = null;
+    let bestVisible = 0;
+    let pending = ids.length;
+    ids.forEach((id) => {
+      cardRefs.current.get(id)?.measureInWindow((_x, y, _w, h) => {
+        // Visible band excludes the header (top) and the tab bar (bottom).
+        const visible = h > 0 ? Math.max(0, Math.min(y + h, screenH - 90) - Math.max(y, 120)) / h : 0;
+        if (visible >= 0.6 && visible > bestVisible) {
+          bestVisible = visible;
+          bestId = id;
+        }
+        pending -= 1;
+        if (pending === 0) setActiveVideoId(bestId);
+      });
+    });
+  }, [videoIdsKey]);
+
+  const onFeedScroll = () => {
+    const now = Date.now();
+    if (now - lastPickRef.current > 250) {
+      lastPickRef.current = now;
+      pickActiveVideo();
+    }
+  };
+
+  // Re-evaluate once the feed renders / changes.
+  useEffect(() => {
+    if (!activeCommunity || roomTab !== 'feed') return;
+    const t = setTimeout(pickActiveVideo, 400);
+    return () => clearTimeout(t);
+  }, [activeCommunity, roomTab, feedFilter, pickActiveVideo]);
+
+  const roomVideoPaused =
+    !activeCommunity || roomTab !== 'feed' || !!activeCritiquePost || !!reelViewer;
+
+  // Thumbnail first, then play the active card inline after a short delay.
+  useEffect(() => {
+    setVideoStarted(false);
+    if (playDelayRef.current) clearTimeout(playDelayRef.current);
+    const active = activeVideoId ? communityPosts.find((p) => p.id === activeVideoId) : undefined;
+    if (roomVideoPaused || !active?.videoUrl) {
+      try {
+        player.pause();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    const url = active.videoUrl;
+    playDelayRef.current = setTimeout(async () => {
+      try {
+        await player.replaceAsync(url);
+        player.muted = feedMuted;
+        player.play();
+        setVideoStarted(true);
+      } catch {
+        /* ignore */
+      }
+    }, 1600);
+    return () => {
+      if (playDelayRef.current) clearTimeout(playDelayRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeVideoId, roomVideoPaused]);
+
+  useEffect(() => {
+    try {
+      player.muted = feedMuted;
+    } catch {
+      /* ignore */
+    }
+  }, [feedMuted, player]);
+
+  // Leaving the Circles tab stops playback.
+  useEffect(() => {
+    const unsub = navigation.addListener('blur', () => {
+      try {
+        player.pause();
+      } catch {
+        /* ignore */
+      }
+      setActiveVideoId(null);
+    });
+    return unsub;
+  }, [navigation, player]);
 
   return (
     <View style={styles.container}>
@@ -108,6 +284,15 @@ export const CommunityScreen: React.FC = () => {
               <Ionicons name="arrow-back" size={20} color="#0F172A" />
             </TouchableOpacity>
 
+            {/* Circle logo */}
+            {activeCommunity.avatarUrl ? (
+              <Image source={{ uri: activeCommunity.avatarUrl }} style={styles.roomLogo} />
+            ) : (
+              <View style={[styles.roomLogo, styles.roomLogoFallback]}>
+                <Ionicons name="people" size={18} color={CIRCLE_ACCENT_DARK} />
+              </View>
+            )}
+
             {/* Clickable Community Name & Subtitle -> Opens Mentors, Members & Basic Stats */}
             <TouchableOpacity
               activeOpacity={0.75}
@@ -118,7 +303,7 @@ export const CommunityScreen: React.FC = () => {
                 <Text style={styles.roomHeaderTitle} numberOfLines={1}>
                   {activeCommunity.name}
                 </Text>
-                <Ionicons name="chevron-down" size={16} color="#4F46E5" />
+                <Ionicons name="chevron-down" size={16} color="#7C3AED" />
               </View>
               <View style={styles.roomSubRow}>
                 <Text style={styles.roomHeaderSub}>
@@ -128,36 +313,44 @@ export const CommunityScreen: React.FC = () => {
               </View>
             </TouchableOpacity>
 
-            {/* User Static Role Badge */}
-            <View style={[styles.miniRoleChip, isMentor && styles.miniRoleChipMentor]}>
-              <Text style={[styles.miniRoleText, isMentor && styles.miniRoleTextMentor]}>
-                {isMentor ? 'Mentor' : 'Learner'}
-              </Text>
-            </View>
+            {/* Circle settings / group info */}
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => setSettingsCommunity(activeCommunity)}
+              style={styles.roomSettingsBtn}
+            >
+              <Ionicons name="settings-outline" size={19} color={CIRCLE_ACCENT_DARK} />
+            </TouchableOpacity>
           </View>
         </View>
       ) : (
-        /* Top Header for Communities List */
-        <View
+        /* Top Header for Communities List — gradient banner */
+        <LinearGradient
+          colors={circleTheme.banner as any}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
           style={[
             styles.mainHeader,
-            { paddingTop: Math.max(insets.top + spacing.xs, spacing.md) },
+            { paddingTop: Math.max(insets.top + spacing.sm, spacing.md) },
           ]}
         >
           <View style={styles.mainHeaderRow}>
-            <View>
-              <Text style={styles.mainTitle}>Community Circles</Text>
-              <Text style={styles.mainSub}>Your joined groups & practice rooms</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.mainTitle}>Circles</Text>
+              <Text style={styles.mainSub}>Your groups, communities & practice rooms</Text>
             </View>
 
-            {/* User Static Role Badge */}
-            <View style={[styles.roleChip, isMentor && styles.roleChipMentor]}>
-              <Text style={[styles.roleChipText, isMentor && styles.roleChipTextMentor]}>
-                {isMentor ? '✨ Mentor' : '🎓 Learner'}
-              </Text>
-            </View>
+            {/* Create a new circle */}
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setIsCreateCircleOpen(true)}
+              style={styles.createCircleBtn}
+            >
+              <Ionicons name="add" size={16} color={CIRCLE_ACCENT_DARK} />
+              <Text style={styles.createCircleText}>Create</Text>
+            </TouchableOpacity>
           </View>
-        </View>
+        </LinearGradient>
       )}
 
       <ScrollView
@@ -166,6 +359,10 @@ export const CommunityScreen: React.FC = () => {
           { paddingBottom: Math.max(insets.bottom + 95, 120) },
         ]}
         showsVerticalScrollIndicator={false}
+        scrollEventThrottle={100}
+        onScroll={activeCommunity ? onFeedScroll : undefined}
+        onMomentumScrollEnd={activeCommunity ? pickActiveVideo : undefined}
+        onScrollEndDrag={activeCommunity ? pickActiveVideo : undefined}
       >
         {activeCommunity ? (
           /* ================= INSIDE A SPECIFIC COMMUNITY ROOM ================= */
@@ -180,7 +377,7 @@ export const CommunityScreen: React.FC = () => {
                 <Ionicons
                   name="newspaper-outline"
                   size={14}
-                  color={roomTab === 'feed' ? '#4F46E5' : '#64748B'}
+                  color={roomTab === 'feed' ? '#7C3AED' : '#64748B'}
                 />
                 <Text style={[styles.roomSegmentText, roomTab === 'feed' && styles.roomSegmentTextActive]}>
                   Circle Feed
@@ -195,7 +392,7 @@ export const CommunityScreen: React.FC = () => {
                 <Ionicons
                   name="flash-outline"
                   size={14}
-                  color={roomTab === 'events' ? '#4F46E5' : '#64748B'}
+                  color={roomTab === 'events' ? '#7C3AED' : '#64748B'}
                 />
                 <Text style={[styles.roomSegmentText, roomTab === 'events' && styles.roomSegmentTextActive]}>
                   Events & Challenges
@@ -213,59 +410,25 @@ export const CommunityScreen: React.FC = () => {
               <CommunityEventsSection
                 events={communityEvents}
                 communityId={activeCommunity.id}
+                communityName={activeCommunity.name}
                 selectedRole={selectedRole}
                 onSelectEvent={(evt) => setSelectedEvent(evt)}
               />
             ) : (
               /* Feed View */
               <>
-                {/* Active Circle Challenge Slim Callout */}
-                {circleEvents.length > 0 && (
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    onPress={() => setRoomTab('events')}
-                    style={[styles.slimChallengeBanner, shadows.soft]}
-                  >
-                    <View style={styles.slimChallengeLeft}>
-                      <Ionicons name="flash" size={14} color="#D97706" />
-                      <Text style={styles.slimChallengeTitle} numberOfLines={1}>
-                        {circleEvents[0].title} (+{circleEvents[0].xpReward} XP)
-                      </Text>
+                {/* Pinned event posts — vote to join / open your challenge */}
+                {circleEvents
+                  .filter((e) => e.phase === 'voting' || e.phase === 'live')
+                  .map((e) => (
+                    <View key={e.id} style={styles.pinnedEvent}>
+                      <View style={styles.pinnedLabel}>
+                        <Ionicons name="pin" size={11} color="#7C3AED" />
+                        <Text style={styles.pinnedLabelText}>PINNED EVENT</Text>
+                      </View>
+                      <EventCard event={e} onPress={() => setSelectedEvent(e)} />
                     </View>
-                    <View style={styles.slimChallengeRight}>
-                      <Text style={styles.slimChallengeLink}>View Events</Text>
-                      <Ionicons name="chevron-forward" size={12} color="#4F46E5" />
-                    </View>
-                  </TouchableOpacity>
-                )}
-
-                {/* ONE Prominent Post Action */}
-                <TouchableOpacity
-                  activeOpacity={0.88}
-                  onPress={() => setIsCreateModalOpen(true)}
-                  style={[styles.singlePostBox, shadows.soft]}
-                >
-                  <View style={styles.singlePostLeft}>
-                    <LinearGradient
-                      colors={['#4F46E5', '#7C3AED']}
-                      style={styles.singlePostIcon}
-                    >
-                      <Ionicons name="add" size={22} color="#FFFFFF" />
-                    </LinearGradient>
-                    <View style={styles.singlePostTextCol}>
-                      <Text style={styles.singlePostTitle}>
-                        {isMentor ? 'Share Guide or Technique Fix' : 'Share Practice Video or Question'}
-                      </Text>
-                      <Text style={styles.singlePostSub}>
-                        Directly to {activeCommunity.name.split('&')[0].trim()}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.postNowPill}>
-                    <Text style={styles.postNowPillText}>+ Post</Text>
-                  </View>
-                </TouchableOpacity>
+                  ))}
 
                 {/* Clean Feed Filter Pill Bar */}
                 <View style={styles.feedFilterBar}>
@@ -275,7 +438,7 @@ export const CommunityScreen: React.FC = () => {
                     style={[styles.feedFilterBtn, feedFilter === 'all' && styles.feedFilterBtnActive]}
                   >
                     <Text style={[styles.feedFilterText, feedFilter === 'all' && styles.feedFilterTextActive]}>
-                      All ({posts.filter((p) => p.communityId === activeCommunity.id).length})
+                      All ({roomItems.length})
                     </Text>
                   </TouchableOpacity>
 
@@ -285,12 +448,12 @@ export const CommunityScreen: React.FC = () => {
                     style={[styles.feedFilterBtn, feedFilter === 'video' && styles.feedFilterBtnActive]}
                   >
                     <Ionicons
-                      name="videocam"
+                      name="grid"
                       size={12}
                       color={feedFilter === 'video' ? '#FFFFFF' : '#64748B'}
                     />
                     <Text style={[styles.feedFilterText, feedFilter === 'video' && styles.feedFilterTextActive]}>
-                      Videos
+                      Posts
                     </Text>
                   </TouchableOpacity>
 
@@ -305,7 +468,7 @@ export const CommunityScreen: React.FC = () => {
                       color={feedFilter === 'text' ? '#FFFFFF' : '#64748B'}
                     />
                     <Text style={[styles.feedFilterText, feedFilter === 'text' && styles.feedFilterTextActive]}>
-                      Topics
+                      Discuss
                     </Text>
                   </TouchableOpacity>
 
@@ -328,23 +491,52 @@ export const CommunityScreen: React.FC = () => {
                 {/* Posts Feed */}
                 <View style={styles.feedList}>
                   {communityPosts.length > 0 ? (
-                    communityPosts.map((post) => (
-                      <PostCard
-                        key={post.id}
-                        post={post}
-                        onPress={() => setActiveCritiquePost(post)}
-                        onCommentPress={() => setActiveCritiquePost(post)}
-                        onCritiquePress={() => setActiveCritiquePost(post)}
-                        onLikePress={() => toggleLikePost(post.id)}
-                      />
-                    ))
+                    communityPosts.map((post) => {
+                      // Reels: vertical 9:16 card → opens the full-screen reels viewer.
+                      if (post.isShort) {
+                        const idx = roomReels.findIndex((r) => r.id === post.id);
+                        return (
+                          <CircleReelCard
+                            key={post.id}
+                            post={post}
+                            onOpen={() => setReelViewer({ reels: roomReels, index: Math.max(0, idx) })}
+                          />
+                        );
+                      }
+                      // Discussion (text) posts are read-only inline — no detail modal.
+                      const openPost = post.postType === 'text' ? undefined : () => setActiveCritiquePost(post);
+                      return (
+                        <View
+                          key={post.id}
+                          collapsable={false}
+                          ref={(r) => {
+                            if (r) cardRefs.current.set(post.id, r);
+                            else cardRefs.current.delete(post.id);
+                          }}
+                        >
+                          {/* Same card as the Home feed (stats bar + inline autoplay) */}
+                          <PostCard
+                            post={post}
+                            onPress={openPost}
+                            onCommentPress={openPost}
+                            showActions={false}
+                            showStats
+                            isActive={post.id === activeVideoId}
+                            player={player}
+                            muted={feedMuted}
+                            onToggleMute={() => setFeedMuted((m) => !m)}
+                            videoStarted={post.id === activeVideoId && videoStarted}
+                          />
+                        </View>
+                      );
+                    })
                   ) : (
                     <View style={styles.emptyCard}>
                       <Ionicons name="videocam-outline" size={38} color="#94A3B8" />
                       <Text style={styles.emptyTitle}>No posts matching this filter</Text>
                       <TouchableOpacity
                         activeOpacity={0.8}
-                        onPress={() => setIsCreateModalOpen(true)}
+                        onPress={() => navigation.navigate('AddTab', { circleId: activeCommunity.id })}
                         style={styles.firstPostBtn}
                       >
                         <Text style={styles.firstPostBtnText}>Upload First Practice Clip</Text>
@@ -364,7 +556,7 @@ export const CommunityScreen: React.FC = () => {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.categoryScroll}
             >
-              {['All', 'Music', 'Coding', 'Design'].map((cat) => {
+              {availableCategories.map((cat) => {
                 const isSelected = communityCategoryFilter === cat;
                 return (
                   <TouchableOpacity
@@ -381,6 +573,24 @@ export const CommunityScreen: React.FC = () => {
               })}
             </ScrollView>
 
+            {/* Search circles */}
+            <View style={styles.circleSearchBar}>
+              <Ionicons name="search" size={18} color="#94A3B8" />
+              <TextInput
+                style={styles.circleSearchInput}
+                placeholder="Search circles by name or category"
+                placeholderTextColor="#94A3B8"
+                value={circleSearch}
+                onChangeText={setCircleSearch}
+                returnKeyType="search"
+              />
+              {circleSearch.length > 0 && (
+                <TouchableOpacity onPress={() => setCircleSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Ionicons name="close-circle" size={18} color="#CBD5E1" />
+                </TouchableOpacity>
+              )}
+            </View>
+
             {/* Joined Communities Section */}
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionHeader}>
@@ -395,6 +605,12 @@ export const CommunityScreen: React.FC = () => {
                   (c) =>
                     communityCategoryFilter === 'All' ||
                     c.category.toLowerCase() === communityCategoryFilter.toLowerCase()
+                )
+                .filter(
+                  (c) =>
+                    circleSearch.trim() === '' ||
+                    c.name.toLowerCase().includes(circleSearch.trim().toLowerCase()) ||
+                    c.category.toLowerCase().includes(circleSearch.trim().toLowerCase())
                 )
                 .map((c) => (
                   <TouchableOpacity
@@ -427,27 +643,37 @@ export const CommunityScreen: React.FC = () => {
                         {c.category} • {c.memberCount} members
                       </Text>
 
-                      {/* Avatars Stack */}
+                      {/* Real members */}
                       <View style={styles.avatarRow}>
-                        <View style={styles.stackWrap}>
-                          {c.avatarStack?.map((uri, idx) => (
-                            <Image
-                              key={idx}
-                              source={{ uri }}
-                              style={[
-                                styles.stackImg,
-                                { marginLeft: idx === 0 ? 0 : -8, zIndex: 5 - idx },
-                              ]}
-                            />
-                          ))}
-                        </View>
-                        <View style={styles.activeDot} />
-                        <Text style={styles.activeLabel}>Live Mentors</Text>
+                        {c.members.length > 0 ? (
+                          <>
+                            <View style={styles.stackWrap}>
+                              {c.members.slice(0, 4).map((m, idx) => (
+                                <View
+                                  key={m.id}
+                                  style={[
+                                    styles.stackAvatarWrap,
+                                    { marginLeft: idx === 0 ? 0 : -8, zIndex: 5 - idx },
+                                  ]}
+                                >
+                                  <Avatar name={m.name} size={22} />
+                                </View>
+                              ))}
+                            </View>
+                            <Text style={styles.activeLabel}>
+                              {c.mentorCount > 0
+                                ? `${c.mentorCount} mentor${c.mentorCount === 1 ? '' : 's'} active`
+                                : `${c.memberCount} member${c.memberCount === 1 ? '' : 's'}`}
+                            </Text>
+                          </>
+                        ) : (
+                          <Text style={styles.activeLabel}>Be the first to practice here</Text>
+                        )}
                       </View>
                     </View>
 
                     <View style={styles.enterArrowBox}>
-                      <Ionicons name="chevron-forward" size={18} color="#4F46E5" />
+                      <Ionicons name="chevron-forward" size={18} color="#7C3AED" />
                     </View>
                   </TouchableOpacity>
                 ))}
@@ -467,6 +693,12 @@ export const CommunityScreen: React.FC = () => {
                     (c) =>
                       communityCategoryFilter === 'All' ||
                       c.category.toLowerCase() === communityCategoryFilter.toLowerCase()
+                  )
+                  .filter(
+                    (c) =>
+                      circleSearch.trim() === '' ||
+                      c.name.toLowerCase().includes(circleSearch.trim().toLowerCase()) ||
+                      c.category.toLowerCase().includes(circleSearch.trim().toLowerCase())
                   )
                   .map((c) => (
                     <View key={c.id} style={[styles.discoverCard, shadows.soft]}>
@@ -507,11 +739,26 @@ export const CommunityScreen: React.FC = () => {
         onClose={() => setActiveCritiquePost(null)}
       />
 
-      {/* Unified Create / Upload Post Modal (No Community Picker, Single Action) */}
-      <CreatePostModal
-        visible={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
-        community={activeCommunity}
+      {/* Circle reels open in the full-screen reels format */}
+      <ReelViewerModal
+        visible={!!reelViewer}
+        reels={reelViewer?.reels ?? []}
+        startIndex={reelViewer?.index ?? 0}
+        onClose={() => setReelViewer(null)}
+      />
+
+      {/* Create a new Circle */}
+      <CreateCircleModal
+        visible={isCreateCircleOpen}
+        onClose={() => setIsCreateCircleOpen(false)}
+      />
+
+      {/* Circle settings / group info */}
+      <CircleSettingsModal
+        visible={!!settingsCommunity}
+        community={settingsCommunity}
+        onClose={() => setSettingsCommunity(null)}
+        onDeletedOrLeft={() => setActiveCommunity(null)}
       />
 
       {/* Community Details Modal: Mentors, Members & Basic Stats */}
@@ -534,14 +781,14 @@ export const CommunityScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    // Circle section theme (teal tint) — distinct from Home.
+    backgroundColor: CIRCLE_BG,
   },
   mainHeader: {
-    backgroundColor: '#FFFFFF',
     paddingHorizontal: spacing.base,
-    paddingBottom: spacing.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    paddingBottom: spacing.lg,
+    borderBottomLeftRadius: 26,
+    borderBottomRightRadius: 26,
   },
   mainHeaderRow: {
     flexDirection: 'row',
@@ -549,22 +796,44 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   mainTitle: {
-    fontSize: 18,
+    fontSize: 24,
     fontWeight: typography.weights.bold,
-    color: '#0F172A',
+    color: '#FFFFFF',
   },
   mainSub: {
-    fontSize: 11,
-    color: '#64748B',
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.85)',
     marginTop: 2,
   },
+  createCircleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: borderRadius.full,
+  },
+  createCircleText: {
+    color: CIRCLE_ACCENT_DARK,
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+  roomSettingsBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: CIRCLE_ACCENT_LIGHT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   roleChip: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#EDE9FE',
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: borderRadius.full,
     borderWidth: 1,
-    borderColor: '#C7D2FE',
+    borderColor: '#DDD6FE',
   },
   roleChipMentor: {
     backgroundColor: '#FAF5FF',
@@ -573,7 +842,7 @@ const styles = StyleSheet.create({
   roleChipText: {
     fontSize: 11,
     fontWeight: 'bold',
-    color: '#4F46E5',
+    color: '#7C3AED',
   },
   roleChipTextMentor: {
     color: '#7C3AED',
@@ -596,6 +865,16 @@ const styles = StyleSheet.create({
     height: 36,
     borderRadius: 18,
     backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  roomLogo: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+  },
+  roomLogoFallback: {
+    backgroundColor: CIRCLE_ACCENT_LIGHT,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -625,11 +904,11 @@ const styles = StyleSheet.create({
   },
   tapInfoNotice: {
     fontSize: 10,
-    color: '#4F46E5',
+    color: '#7C3AED',
     fontWeight: 'bold',
   },
   miniRoleChip: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#EDE9FE',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: borderRadius.full,
@@ -640,7 +919,7 @@ const styles = StyleSheet.create({
   miniRoleText: {
     fontSize: 10,
     fontWeight: 'bold',
-    color: '#4F46E5',
+    color: '#7C3AED',
   },
   miniRoleTextMentor: {
     color: '#7C3AED',
@@ -682,7 +961,7 @@ const styles = StyleSheet.create({
     color: '#64748B',
   },
   roomSegmentTextActive: {
-    color: '#4F46E5',
+    color: '#7C3AED',
     fontWeight: 'bold',
   },
   roomEventBadge: {
@@ -696,6 +975,9 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#D97706',
   },
+  pinnedEvent: { marginHorizontal: spacing.base, marginBottom: 12, gap: 6 },
+  pinnedLabel: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  pinnedLabelText: { fontSize: 10, fontWeight: '800', color: '#7C3AED', letterSpacing: 0.6 },
   slimChallengeBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -727,7 +1009,7 @@ const styles = StyleSheet.create({
   slimChallengeLink: {
     fontSize: 11,
     fontWeight: 'bold',
-    color: '#4F46E5',
+    color: '#7C3AED',
   },
   singlePostBox: {
     flexDirection: 'row',
@@ -766,7 +1048,7 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   postNowPill: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#EDE9FE',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: borderRadius.full,
@@ -774,7 +1056,7 @@ const styles = StyleSheet.create({
   postNowPillText: {
     fontSize: 11,
     fontWeight: 'bold',
-    color: '#4F46E5',
+    color: '#7C3AED',
   },
   feedFilterBar: {
     flexDirection: 'row',
@@ -793,7 +1075,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   feedFilterBtnActive: {
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#7C3AED',
   },
   feedFilterText: {
     fontSize: 11,
@@ -823,7 +1105,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   firstPostBtn: {
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#7C3AED',
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: borderRadius.full,
@@ -840,6 +1122,25 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingBottom: 4,
   },
+  circleSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  circleSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#0F172A',
+    padding: 0,
+  },
   catFilterChip: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 14,
@@ -849,8 +1150,8 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
   catFilterChipActive: {
-    backgroundColor: '#4F46E5',
-    borderColor: '#4F46E5',
+    backgroundColor: '#7C3AED',
+    borderColor: '#7C3AED',
   },
   catFilterText: {
     fontSize: 11,
@@ -935,12 +1236,11 @@ const styles = StyleSheet.create({
   stackWrap: {
     flexDirection: 'row',
   },
-  stackImg: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+  stackAvatarWrap: {
+    borderRadius: 11,
     borderWidth: 1.5,
     borderColor: '#FFFFFF',
+    overflow: 'hidden',
   },
   activeDot: {
     width: 6,
@@ -957,7 +1257,7 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#EDE9FE',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -998,16 +1298,16 @@ const styles = StyleSheet.create({
     color: '#64748B',
   },
   joinBtn: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#EDE9FE',
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: borderRadius.full,
     borderWidth: 1,
-    borderColor: '#C7D2FE',
+    borderColor: '#DDD6FE',
   },
   joinBtnText: {
     fontSize: 11,
     fontWeight: 'bold',
-    color: '#4F46E5',
+    color: '#7C3AED',
   },
 });

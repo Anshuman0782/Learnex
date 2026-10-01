@@ -15,7 +15,17 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
   onNotificationPress,
   onProfilePress,
 }) => {
-  const { user, selectedRole, selectedHobby, openRewardsModal, showDialog } = useApp();
+  const {
+    user,
+    selectedRole,
+    selectedHobby,
+    openRewardsModal,
+    showDialog,
+    unreadCount,
+    openNotifications,
+    chatUnread,
+    openChatInbox,
+  } = useApp();
 
   return (
     <View style={styles.container}>
@@ -33,14 +43,28 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
           </Text>
         </View>
 
+        <View style={styles.topIcons}>
+        <TouchableOpacity activeOpacity={0.7} onPress={openChatInbox} style={styles.bellButton}>
+          <Ionicons name="chatbubble-ellipses-outline" size={20} color="#1E293B" />
+          {chatUnread > 0 && (
+            <View style={styles.bellBadge}>
+              <Text style={styles.bellBadgeText}>{chatUnread > 9 ? '9+' : chatUnread}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
         <TouchableOpacity
           activeOpacity={0.7}
-          onPress={onNotificationPress}
+          onPress={onNotificationPress ?? openNotifications}
           style={styles.bellButton}
         >
           <Ionicons name="notifications-outline" size={20} color="#1E293B" />
-          <View style={styles.bellDot} />
+          {unreadCount > 0 && (
+            <View style={styles.bellBadge}>
+              <Text style={styles.bellBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+            </View>
+          )}
         </TouchableOpacity>
+        </View>
       </View>
 
       {/* Main Profile & Stats Row */}
@@ -66,7 +90,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             />
           </LinearGradient>
           <View style={styles.levelBadge}>
-            <Text style={styles.levelBadgeText}>L2</Text>
+            <Text style={styles.levelBadgeText}>L{user?.level ?? 1}</Text>
           </View>
         </View>
 
@@ -102,9 +126,13 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             style={styles.rewardsPillGradient}
           >
             <Ionicons name="trophy" size={13} color="#FDE047" />
-            <Text style={styles.rewardsPillRank}>#4</Text>
-            <View style={styles.pillDivider} />
-            <Text style={styles.rewardsPillXp}>{user?.xpPoints || 1240} XP</Text>
+            {(user?.seasonRank ?? 0) > 0 && (
+              <>
+                <Text style={styles.rewardsPillRank}>#{user?.seasonRank}</Text>
+                <View style={styles.pillDivider} />
+              </>
+            )}
+            <Text style={styles.rewardsPillXp}>{user?.seasonXp ?? 0} XP</Text>
           </LinearGradient>
         </TouchableOpacity>
 
@@ -114,7 +142,10 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
           onPress={() =>
             showDialog({
               title: 'Streak Fire 🔥',
-              message: `You are on an active ${user?.streakDays || 6}-day learning streak! Complete today's session to keep your momentum going.`,
+              message:
+                (user?.streakDays ?? 0) > 0
+                  ? `You are on an active ${user?.streakDays}-day learning streak! Open the app tomorrow to keep your momentum going.`
+                  : `Start your streak today! Open the app daily to build a learning streak.`,
               icon: 'flame',
               confirmText: 'Keep It Going!',
             })
@@ -128,7 +159,7 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             style={styles.streakGradient}
           >
             <Ionicons name="flame" size={13} color="#FFFFFF" />
-            <Text style={styles.streakCount}>{user?.streakDays || 6}d</Text>
+            <Text style={styles.streakCount}>{user?.streakDays ?? 0}d</Text>
           </LinearGradient>
         </TouchableOpacity>
       </View>
@@ -312,6 +343,11 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#FFFFFF',
   },
+  topIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   bellButton: {
     width: 38,
     height: 38,
@@ -322,6 +358,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
     position: 'relative',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    minWidth: 17,
+    height: 17,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  bellBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '800',
   },
   bellDot: {
     position: 'absolute',

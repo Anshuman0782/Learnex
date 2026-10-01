@@ -10,3 +10,7 @@ web-build/
 *.orig.*
 .DS_Store
 *.log
+
+# Firebase / Google service-account keys are PRIVATE (upload them to EAS, never commit)
+*service-account*.json
+*firebase-adminsdk*.json

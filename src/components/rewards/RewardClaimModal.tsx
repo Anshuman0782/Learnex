@@ -12,6 +12,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { SeasonRewardItem } from '../../types';
+import { useApp } from '../../context/AppContext';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 
 interface RewardClaimModalProps {
@@ -25,23 +26,41 @@ export const RewardClaimModal: React.FC<RewardClaimModalProps> = ({
   reward,
   onClose,
 }) => {
+  const { claimReward } = useApp();
   const [copied, setCopied] = useState(false);
+  const [claiming, setClaiming] = useState(false);
+  const [code, setCode] = useState<string | undefined>(reward?.claimedCode);
+
+  React.useEffect(() => {
+    setCode(reward?.claimedCode);
+  }, [reward]);
 
   if (!reward) return null;
 
+  const claimed = reward.claimed || !!code;
+
   const handleCopyCode = () => {
-    if (reward.sampleCode) {
-      if (Clipboard && Clipboard.setString) {
-        Clipboard.setString(reward.sampleCode);
+    if (!code) return;
+    if (Clipboard && Clipboard.setString) {
+      Clipboard.setString(code);
+    }
+    setCopied(true);
+    Alert.alert('Code Copied', `Code "${code}" has been copied to your clipboard.`);
+    setTimeout(() => setCopied(false), 3000);
+  };
+
+  const handleClaim = async () => {
+    setClaiming(true);
+    try {
+      const res = await claimReward(reward.id);
+      if (res) {
+        setCode(res.code);
+        Alert.alert('Reward Claimed! 🎉', `Your code: ${res.code}`);
+      } else {
+        Alert.alert('Could Not Claim', 'You are not eligible for this reward yet, or it was already claimed.');
       }
-      setCopied(true);
-      Alert.alert(
-        'Code Copied',
-        `Code "${reward.sampleCode}" has been copied to your clipboard.`
-      );
-      setTimeout(() => setCopied(false), 3000);
-    } else {
-      Alert.alert('Reward Linked', 'This seasonal perk is linked directly to your profile.');
+    } finally {
+      setClaiming(false);
     }
   };
 
@@ -90,12 +109,12 @@ export const RewardClaimModal: React.FC<RewardClaimModalProps> = ({
           <View style={styles.bodyContent}>
             <Text style={styles.descriptionText}>{reward.description}</Text>
 
-            {/* Voucher Code Box */}
-            {reward.sampleCode && (
+            {/* Real redemption code — only shown once claimed */}
+            {claimed && code && (
               <View style={styles.voucherContainer}>
-                <Text style={styles.voucherLabel}>DEMO VOUCHER CODE</Text>
+                <Text style={styles.voucherLabel}>YOUR REDEMPTION CODE</Text>
                 <View style={styles.codeRow}>
-                  <Text style={styles.codeText}>{reward.sampleCode}</Text>
+                  <Text style={styles.codeText}>{code}</Text>
                   <TouchableOpacity
                     activeOpacity={0.7}
                     onPress={handleCopyCode}
@@ -106,9 +125,7 @@ export const RewardClaimModal: React.FC<RewardClaimModalProps> = ({
                       size={15}
                       color="#4F46E5"
                     />
-                    <Text style={styles.copyBtnText}>
-                      {copied ? 'Copied' : 'Copy'}
-                    </Text>
+                    <Text style={styles.copyBtnText}>{copied ? 'Copied' : 'Copy'}</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -129,29 +146,57 @@ export const RewardClaimModal: React.FC<RewardClaimModalProps> = ({
 
             {/* Eligibility Note */}
             <View style={styles.eligibilityBox}>
-              <Ionicons name="information-circle" size={15} color="#6366F1" />
+              <Ionicons
+                name={reward.eligible || claimed ? 'checkmark-circle' : 'lock-closed'}
+                size={15}
+                color={reward.eligible || claimed ? '#16A34A' : '#6366F1'}
+              />
               <Text style={styles.eligibilityText}>
-                Unlocked when cycle finishes for: <Text style={{ fontWeight: 'bold' }}>{reward.minRankRequired}</Text>
+                {claimed
+                  ? 'Reward claimed for this season.'
+                  : reward.eligible
+                  ? `You earned this in Season ${reward.earnedSeasonNumber ?? ''} — claim it now!`
+                  : reward.onTrack
+                  ? 'You’re on track! Hold your rank until the season ends to earn it: '
+                  : 'Earned by finishing a season in the '}
+                {!claimed && !reward.eligible && (
+                  <Text style={{ fontWeight: 'bold' }}>{reward.minRankRequired}</Text>
+                )}
               </Text>
             </View>
 
             {/* Action Buttons */}
             <View style={styles.buttonRow}>
-              <TouchableOpacity
-                activeOpacity={0.88}
-                onPress={handleCopyCode}
-                style={styles.primaryClaimBtn}
-              >
-                <LinearGradient
-                  colors={reward.gradientColors || ['#4F46E5', '#7C3AED']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.primaryGradient}
+              {claimed ? (
+                <View style={[styles.primaryClaimBtn, styles.claimedBtn]}>
+                  <Ionicons name="checkmark-circle" size={16} color="#16A34A" />
+                  <Text style={styles.claimedBtnText}>Claimed</Text>
+                </View>
+              ) : reward.eligible ? (
+                <TouchableOpacity
+                  activeOpacity={0.88}
+                  onPress={handleClaim}
+                  disabled={claiming}
+                  style={styles.primaryClaimBtn}
                 >
-                  <Ionicons name="gift-outline" size={16} color="#FFFFFF" />
-                  <Text style={styles.primaryBtnText}>Claim Demo Perk</Text>
-                </LinearGradient>
-              </TouchableOpacity>
+                  <LinearGradient
+                    colors={reward.gradientColors || ['#4F46E5', '#7C3AED']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.primaryGradient}
+                  >
+                    <Ionicons name="gift-outline" size={16} color="#FFFFFF" />
+                    <Text style={styles.primaryBtnText}>
+                      {claiming ? 'Claiming…' : 'Claim Reward'}
+                    </Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              ) : (
+                <View style={[styles.primaryClaimBtn, styles.lockedBtn]}>
+                  <Ionicons name="lock-closed" size={15} color="#94A3B8" />
+                  <Text style={styles.lockedBtnText}>Not eligible yet</Text>
+                </View>
+              )}
 
               <TouchableOpacity
                 activeOpacity={0.7}
@@ -343,6 +388,32 @@ const styles = StyleSheet.create({
   primaryClaimBtn: {
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
+  },
+  claimedBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    backgroundColor: '#DCFCE7',
+  },
+  claimedBtnText: {
+    fontSize: 13,
+    fontWeight: typography.weights.bold,
+    color: '#16A34A',
+  },
+  lockedBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    backgroundColor: '#F1F5F9',
+  },
+  lockedBtnText: {
+    fontSize: 13,
+    fontWeight: typography.weights.bold,
+    color: '#94A3B8',
   },
   primaryGradient: {
     flexDirection: 'row',

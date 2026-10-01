@@ -1,7 +1,9 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { AuthStackParamList } from './types';
+import { SplashScreen } from '../screens/SplashScreen';
 import { LoginScreen } from '../screens/auth/LoginScreen';
+import { ForgotPasswordScreen } from '../screens/auth/ForgotPasswordScreen';
 import { SignUpScreen } from '../screens/auth/SignUpScreen';
 import { CommunityRecommendationScreen } from '../screens/onboarding/CommunityRecommendationScreen';
 import { RoleSelectionScreen } from '../screens/onboarding/RoleSelectionScreen';
@@ -13,13 +15,15 @@ const Stack = createNativeStackNavigator<AuthStackParamList>();
 export const AuthNavigator: React.FC = () => {
   return (
     <Stack.Navigator
-      initialRouteName="Login"
+      initialRouteName="Splash"
       screenOptions={{
         headerShown: false,
         animation: 'slide_from_right',
       }}
     >
+      <Stack.Screen name="Splash" component={SplashScreen} />
       <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
       <Stack.Screen name="SignUp" component={SignUpScreen} />
       <Stack.Screen
         name="CommunityRecommendation"

@@ -16,25 +16,42 @@ type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'RoleSelecti
 export const RoleSelectionScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NavigationProp>();
-  const { setRole, selectedRole } = useApp();
+  const { enrollAsLearner, selectedRole, showDialog } = useApp();
 
   const [currentSelected, setCurrentSelected] = useState<UserRole | null>(
     selectedRole || 'Learner'
   );
+  const [loading, setLoading] = useState(false);
 
   const handleRoleSelect = (roleId: UserRole) => {
     setCurrentSelected(roleId);
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (currentSelected === 'Mentor') {
       navigation.navigate('MentorQuiz');
-    } else if (currentSelected === 'Learner') {
-      setRole('Learner');
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Main', params: { screen: 'HomeTab' } }],
-      });
+      return;
+    }
+    if (currentSelected === 'Learner') {
+      setLoading(true);
+      try {
+        await enrollAsLearner();
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'Main', params: { screen: 'HomeTab' } }],
+        });
+      } catch (err: any) {
+        showDialog({
+          title: 'Something went wrong',
+          message:
+            err?.message ||
+            'We couldn’t set up your account right now. Please check your connection and try again.',
+          icon: 'alert-circle-outline',
+          confirmText: 'Try Again',
+        });
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -89,6 +106,7 @@ export const RoleSelectionScreen: React.FC = () => {
                   : 'Continue as Learner →'
               }
               onPress={handleConfirm}
+              loading={loading && currentSelected === 'Learner'}
               fullWidth
               size="lg"
             />

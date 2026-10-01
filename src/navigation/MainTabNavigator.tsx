@@ -1,14 +1,15 @@
 import React from 'react';
-import { View, StyleSheet, TouchableOpacity, Platform } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Platform, Modal } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MainTabParamList } from './types';
 import { HomeScreen } from '../screens/main/HomeScreen';
-import { CommunityScreen } from '../screens/main/CommunityScreen';
-import { AddContentPlaceholderScreen } from '../screens/main/AddContentPlaceholderScreen';
 import { FeedPlaceholderScreen } from '../screens/main/FeedPlaceholderScreen';
+import { AddContentPlaceholderScreen } from '../screens/main/AddContentPlaceholderScreen';
+import { CommunityScreen } from '../screens/main/CommunityScreen';
+import { RankScreen } from '../screens/main/RankScreen';
 import { ProfilePlaceholderScreen } from '../screens/main/ProfilePlaceholderScreen';
 import { colors, typography, shadows } from '../theme';
 
@@ -36,6 +37,7 @@ const CustomAddButton = ({ children, onPress }: any) => (
 import { useApp } from '../context/AppContext';
 import { UserProfileModal } from '../components/common/UserProfileModal';
 import { RewardsHubModal } from '../components/rewards';
+import { ChatModal } from '../components/chat/ChatModal';
 
 export const MainTabNavigator: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -44,6 +46,8 @@ export const MainTabNavigator: React.FC = () => {
     closeUserProfile,
     isRewardsModalOpen,
     closeRewardsModal,
+    isMyProfileOpen,
+    closeMyProfile,
   } = useApp();
 
   return (
@@ -91,14 +95,14 @@ export const MainTabNavigator: React.FC = () => {
         />
 
         <Tab.Screen
-          name="CommunityTab"
-          component={CommunityScreen}
+          name="ReelsTab"
+          component={FeedPlaceholderScreen}
           options={{
-            tabBarLabel: 'Circles',
+            tabBarLabel: 'Reels',
             tabBarIcon: ({ color, focused }) => (
               <Ionicons
-                name={focused ? 'people' : 'people-outline'}
-                size={23}
+                name={focused ? 'play-circle' : 'play-circle-outline'}
+                size={24}
                 color={color}
               />
             ),
@@ -115,14 +119,14 @@ export const MainTabNavigator: React.FC = () => {
         />
 
         <Tab.Screen
-          name="FeedTab"
-          component={FeedPlaceholderScreen}
+          name="CirclesTab"
+          component={CommunityScreen}
           options={{
-            tabBarLabel: 'Feed',
+            tabBarLabel: 'Circles',
             tabBarIcon: ({ color, focused }) => (
               <Ionicons
-                name={focused ? 'play-circle' : 'play-circle-outline'}
-                size={24}
+                name={focused ? 'people' : 'people-outline'}
+                size={23}
                 color={color}
               />
             ),
@@ -130,14 +134,14 @@ export const MainTabNavigator: React.FC = () => {
         />
 
         <Tab.Screen
-          name="ProfileTab"
-          component={ProfilePlaceholderScreen}
+          name="RankTab"
+          component={RankScreen}
           options={{
-            tabBarLabel: 'Profile',
+            tabBarLabel: 'Rank',
             tabBarIcon: ({ color, focused }) => (
               <Ionicons
-                name={focused ? 'person' : 'person-outline'}
-                size={24}
+                name={focused ? 'trophy' : 'trophy-outline'}
+                size={23}
                 color={color}
               />
             ),
@@ -152,11 +156,23 @@ export const MainTabNavigator: React.FC = () => {
         onClose={closeUserProfile}
       />
 
+      {/* Global real-time chat (inbox + conversations) */}
+      <ChatModal />
+
       {/* Global Seasonal Rewards & XP Leaderboard Hub */}
       <RewardsHubModal
         visible={isRewardsModalOpen}
         onClose={closeRewardsModal}
       />
+
+      {/* User's Own Full Profile Page */}
+      <Modal
+        visible={isMyProfileOpen}
+        animationType="slide"
+        onRequestClose={closeMyProfile}
+      >
+        <ProfilePlaceholderScreen onClose={closeMyProfile} />
+      </Modal>
     </View>
   );
 };

@@ -14,6 +14,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../../context/AppContext';
+import { Avatar } from '../common/Avatar';
+import { takePhoto, pickPhoto } from '../../services/imagePicker';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 
 interface EditProfileModalProps {
@@ -21,70 +23,74 @@ interface EditProfileModalProps {
   onClose: () => void;
 }
 
-const PRESET_AVATARS = [
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=300&auto=format&fit=crop&q=80',
-];
-
 const SKILL_TRACKS = ['Music', 'Coding', 'Design'];
 
 export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   visible,
   onClose,
 }) => {
-  const { user, updateUser } = useApp();
+  const { user, updateUser, updateAvatar } = useApp();
 
   const [name, setName] = useState('');
-  const [handle, setHandle] = useState('');
   const [bio, setBio] = useState('');
   const [hobby, setHobby] = useState('Music');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [avatarUrl, setAvatarUrl] = useState(PRESET_AVATARS[0]);
+  const [avatarUrl, setAvatarUrl] = useState('');
+  const [avatarUploading, setAvatarUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (user) {
       setName(user.name || '');
-      setHandle(user.handle || `@${(user.name || 'user').toLowerCase().replace(/\s+/g, '_')}`);
-      setBio(
-        user.bio ||
-          'Vocal student passionate about R&B and pop. Practicing head voice mix and breath control daily!'
-      );
+      setBio(user.bio || '');
       setHobby(user.hobby || 'Music');
       setEmail(user.email || '');
       setPhone(user.phone || '');
-      setAvatarUrl(user.avatarUrl || PRESET_AVATARS[0]);
+      setAvatarUrl(user.avatarUrl || '');
     }
   }, [user, visible]);
 
-  const handleSave = () => {
+  const handlePickAvatar = async (mode: 'camera' | 'library') => {
+    const res = mode === 'camera' ? await takePhoto() : await pickPhoto();
+    if (res.status === 'denied') {
+      Alert.alert('Access Needed', 'Please allow photo/camera access for LERNEX in your device settings.');
+      return;
+    }
+    if (res.status !== 'ok') return;
+    setAvatarUrl(res.uri); // instant preview
+    setAvatarUploading(true);
+    try {
+      await updateAvatar(res.uri, res.mimeType); // uploads + persists on the server
+    } catch {
+      Alert.alert('Upload Failed', 'Could not upload your photo. Please try again.');
+    } finally {
+      setAvatarUploading(false);
+    }
+  };
+
+  const handleSave = async () => {
     if (!name.trim()) {
       Alert.alert('Name Required', 'Please enter your full name.');
       return;
     }
-
     setIsSaving(true);
-
-    setTimeout(() => {
-      updateUser({
+    try {
+      // name, bio and avatar persist server-side; hobby is kept locally.
+      await updateUser({
         name: name.trim(),
-        handle: handle.trim(),
         bio: bio.trim(),
         hobby,
         email: email.trim(),
         phone: phone.trim(),
-        avatarUrl,
       });
-
-      setIsSaving(false);
       onClose();
       Alert.alert('Profile Updated! ✨', 'Your changes have been saved.');
-    }, 400);
+    } catch (err: any) {
+      Alert.alert('Update Failed', err?.message || 'Could not save your changes. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -120,43 +126,44 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {/* Avatar Selector */}
+            {/* Profile photo — real camera / upload */}
             <View style={styles.avatarSection}>
-              <View style={styles.avatarContainer}>
-                <Image source={{ uri: avatarUrl }} style={styles.currentAvatarImg} />
+              <TouchableOpacity
+                activeOpacity={0.85}
+                onPress={() => handlePickAvatar('library')}
+                style={styles.avatarContainer}
+              >
+                {avatarUrl ? (
+                  <Image source={{ uri: avatarUrl }} style={styles.currentAvatarImg} />
+                ) : (
+                  <Avatar name={name || user?.name} size={92} />
+                )}
                 <View style={styles.cameraIconBadge}>
                   <Ionicons name="camera" size={14} color="#FFFFFF" />
                 </View>
-              </View>
+              </TouchableOpacity>
 
-              <Text style={styles.avatarSectionTitle}>Choose Avatar</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.avatarScroll}
-              >
-                {PRESET_AVATARS.map((uri, idx) => {
-                  const isSelected = avatarUrl === uri;
-                  return (
-                    <TouchableOpacity
-                      key={idx}
-                      activeOpacity={0.8}
-                      onPress={() => setAvatarUrl(uri)}
-                      style={[
-                        styles.avatarOption,
-                        isSelected && styles.avatarOptionSelected,
-                      ]}
-                    >
-                      <Image source={{ uri }} style={styles.avatarOptionImg} />
-                      {isSelected && (
-                        <View style={styles.avatarSelectedBadge}>
-                          <Ionicons name="checkmark" size={10} color="#FFFFFF" />
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+              <View style={styles.photoBtnRow}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => handlePickAvatar('camera')}
+                  style={styles.photoBtn}
+                  disabled={avatarUploading}
+                >
+                  <Ionicons name="camera-outline" size={16} color="#4F46E5" />
+                  <Text style={styles.photoBtnText}>Take Photo</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => handlePickAvatar('library')}
+                  style={styles.photoBtn}
+                  disabled={avatarUploading}
+                >
+                  <Ionicons name="image-outline" size={16} color="#4F46E5" />
+                  <Text style={styles.photoBtnText}>Upload</Text>
+                </TouchableOpacity>
+              </View>
+              {avatarUploading && <Text style={styles.uploadingText}>Uploading photo…</Text>}
             </View>
 
             {/* Input Fields */}
@@ -169,20 +176,6 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                     value={name}
                     onChangeText={setName}
                     placeholder="Your name"
-                    placeholderTextColor="#94A3B8"
-                    style={styles.textInput}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Username / Handle</Text>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="at-outline" size={16} color="#4F46E5" style={styles.fieldIcon} />
-                  <TextInput
-                    value={handle}
-                    onChangeText={setHandle}
-                    placeholder="@username"
                     placeholderTextColor="#94A3B8"
                     style={styles.textInput}
                   />
@@ -350,6 +343,32 @@ const styles = StyleSheet.create({
     borderRadius: 40,
     borderWidth: 3,
     borderColor: '#4F46E5',
+  },
+  photoBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: spacing.sm,
+  },
+  photoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: borderRadius.full,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  photoBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
+  uploadingText: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 6,
   },
   cameraIconBadge: {
     position: 'absolute',

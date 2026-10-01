@@ -8,7 +8,6 @@ import {
   Platform,
   TouchableOpacity,
   Image,
-  TextInput,
   Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,44 +18,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { AuthStackParamList } from '../../navigation/types';
 import { useApp } from '../../context/AppContext';
 import { Input, Button } from '../../components/common';
+import { takePhoto, pickPhoto } from '../../services/imagePicker';
 import { POPULAR_HOBBIES } from '../../data/mockData';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'SignUp'>;
-
-// Curated avatar choices for new learners & mentors
-const PRESET_AVATARS = [
-  {
-    id: 'av-1',
-    label: 'Vocalist',
-    url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'av-2',
-    label: 'Musician',
-    url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'av-3',
-    label: 'Producer',
-    url: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'av-4',
-    label: 'Developer',
-    url: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=300&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'av-5',
-    label: 'Creator',
-    url: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=300&auto=format&fit=crop&q=80',
-  },
-  {
-    id: 'av-6',
-    label: 'Artist',
-    url: 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=300&auto=format&fit=crop&q=80',
-  },
-];
 
 const YEARS = Array.from({ length: 45 }, (_, i) => String(2015 - i));
 const MONTHS = [
@@ -85,12 +51,9 @@ const PRESET_DOBS = [
 export const SignUpScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NavigationProp>();
-  const { signup } = useApp();
+  const { signup, showDialog } = useApp();
 
-  const [avatarUrl, setAvatarUrl] = useState(PRESET_AVATARS[0].url);
-  const [showAvatarPicker, setShowAvatarPicker] = useState(false);
-  const [customAvatarInput, setCustomAvatarInput] = useState('');
-  const [showCustomModal, setShowCustomModal] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState('');
 
   const [fullName, setFullName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -148,14 +111,13 @@ export const SignUpScreen: React.FC = () => {
     return Object.keys(errs).length === 0;
   };
 
-  const handleSignUp = () => {
+  const handleSignUp = async () => {
     if (!validate()) return;
     setLoading(true);
     const finalHobby = isCustomHobby ? customHobby.trim() : selectedHobby;
 
-    setTimeout(() => {
-      setLoading(false);
-      signup({
+    try {
+      await signup({
         name: fullName.trim(),
         phone: phoneNumber.trim(),
         email: email.trim(),
@@ -165,16 +127,57 @@ export const SignUpScreen: React.FC = () => {
         avatarUrl,
       });
       navigation.navigate('CommunityRecommendation');
-    }, 400);
-  };
-
-  const handleApplyCustomAvatar = () => {
-    if (customAvatarInput.trim()) {
-      setAvatarUrl(customAvatarInput.trim());
-      setShowCustomModal(false);
-      setCustomAvatarInput('');
+    } catch (err: any) {
+      const status = err?.status;
+      const message =
+        status === 409
+          ? 'An account with this email or phone already exists. Try signing in instead.'
+          : status === 400
+          ? err?.message || 'Please check your details and try again.'
+          : err?.message ||
+            'Unable to create your account right now. Check your connection and try again.';
+      showDialog({
+        title: 'Sign Up Failed',
+        message,
+        icon: 'alert-circle-outline',
+        confirmText: 'Try Again',
+      });
+    } finally {
+      setLoading(false);
     }
   };
+
+  const handleTakePhoto = async () => {
+    const res = await takePhoto();
+    if (res.status === 'ok') {
+      setAvatarUrl(res.uri);
+    } else if (res.status === 'denied') {
+      showDialog({
+        title: 'Camera Access Needed',
+        message:
+          'To take a profile photo, allow camera access for LERNEX in your device settings, then try again.',
+        icon: 'camera-outline',
+        confirmText: 'Got it',
+      });
+    }
+  };
+
+  const handlePickPhoto = async () => {
+    const res = await pickPhoto();
+    if (res.status === 'ok') {
+      setAvatarUrl(res.uri);
+    } else if (res.status === 'denied') {
+      showDialog({
+        title: 'Photo Access Needed',
+        message:
+          'To choose a profile photo, allow photo access for LERNEX in your device settings, then try again.',
+        icon: 'images-outline',
+        confirmText: 'Got it',
+      });
+    }
+  };
+
+  const handleRemovePhoto = () => setAvatarUrl('');
 
   return (
     <KeyboardAvoidingView
@@ -202,14 +205,20 @@ export const SignUpScreen: React.FC = () => {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Profile Picture Option Section */}
+        {/* Profile Picture Section — take a live photo or upload from gallery */}
         <View style={styles.avatarSection}>
           <TouchableOpacity
             activeOpacity={0.88}
-            onPress={() => setShowAvatarPicker(!showAvatarPicker)}
+            onPress={handlePickPhoto}
             style={styles.avatarWrapper}
           >
-            <Image source={{ uri: avatarUrl }} style={styles.mainAvatar} />
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.mainAvatar} />
+            ) : (
+              <View style={[styles.mainAvatar, styles.avatarPlaceholder]}>
+                <Ionicons name="person" size={40} color="#94A3B8" />
+              </View>
+            )}
             <LinearGradient
               colors={['#4F46E5', '#7C3AED']}
               style={styles.avatarEditBadge}
@@ -218,59 +227,41 @@ export const SignUpScreen: React.FC = () => {
             </LinearGradient>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            activeOpacity={0.7}
-            onPress={() => setShowAvatarPicker(!showAvatarPicker)}
-            style={styles.changePhotoTextBtn}
-          >
-            <Text style={styles.changePhotoText}>
-              {showAvatarPicker ? 'Hide Photo Options' : 'Choose Profile Picture'}
-            </Text>
-            <Ionicons
-              name={showAvatarPicker ? 'chevron-up' : 'chevron-down'}
-              size={13}
-              color="#4F46E5"
-            />
-          </TouchableOpacity>
+          <Text style={styles.avatarHint}>
+            {avatarUrl ? 'Looking good!' : 'Add a profile photo'}
+          </Text>
 
-          {/* Collapsible Avatar Picker Tray */}
-          {showAvatarPicker && (
-            <View style={[styles.presetTray, shadows.soft]}>
-              <Text style={styles.presetTrayTitle}>SELECT A PROFILE AVATAR</Text>
-              <View style={styles.presetGrid}>
-                {PRESET_AVATARS.map((item) => {
-                  const isSelected = avatarUrl === item.url;
-                  return (
-                    <TouchableOpacity
-                      key={item.id}
-                      activeOpacity={0.8}
-                      onPress={() => setAvatarUrl(item.url)}
-                      style={[
-                        styles.presetThumbBox,
-                        isSelected && styles.presetThumbBoxActive,
-                      ]}
-                    >
-                      <Image source={{ uri: item.url }} style={styles.presetImage} />
-                      {isSelected && (
-                        <View style={styles.presetCheckOverlay}>
-                          <Ionicons name="checkmark-circle" size={16} color="#4F46E5" />
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+          {/* Take Photo / Upload actions */}
+          <View style={styles.photoActionRow}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handleTakePhoto}
+              style={styles.photoActionBtn}
+            >
+              <Ionicons name="camera-outline" size={17} color="#4F46E5" />
+              <Text style={styles.photoActionText}>Take Photo</Text>
+            </TouchableOpacity>
 
-              <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={() => setShowCustomModal(true)}
-                style={styles.customUrlLink}
-              >
-                <Ionicons name="link-outline" size={14} color="#4F46E5" />
-                <Text style={styles.customUrlLinkText}>Paste custom image URL</Text>
-              </TouchableOpacity>
-            </View>
-          )}
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handlePickPhoto}
+              style={styles.photoActionBtn}
+            >
+              <Ionicons name="image-outline" size={17} color="#4F46E5" />
+              <Text style={styles.photoActionText}>Upload</Text>
+            </TouchableOpacity>
+          </View>
+
+          {avatarUrl ? (
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={handleRemovePhoto}
+              style={styles.removePhotoBtn}
+            >
+              <Ionicons name="close-circle" size={14} color="#EF4444" />
+              <Text style={styles.removePhotoText}>Remove photo</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* Registration Form Card */}
@@ -439,49 +430,6 @@ export const SignUpScreen: React.FC = () => {
         </View>
       </ScrollView>
 
-      {/* Custom Avatar Modal */}
-      <Modal
-        visible={showCustomModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowCustomModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, shadows.card]}>
-            <Text style={styles.modalTitle}>Custom Profile Picture</Text>
-            <Text style={styles.modalSubtitle}>
-              Paste a public image URL to use as your avatar.
-            </Text>
-
-            <TextInput
-              placeholder="https://images.unsplash.com/..."
-              value={customAvatarInput}
-              onChangeText={setCustomAvatarInput}
-              autoCapitalize="none"
-              style={styles.modalInput}
-            />
-
-            <View style={styles.modalButtonRow}>
-              <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={() => setShowCustomModal(false)}
-                style={styles.modalCancelBtn}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                activeOpacity={0.88}
-                onPress={handleApplyCustomAvatar}
-                style={styles.modalApplyBtn}
-              >
-                <Text style={styles.modalApplyText}>Apply Photo</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
       {/* Interactive Date of Birth Picker Modal */}
       <Modal
         visible={showDatePickerModal}
@@ -635,7 +583,7 @@ export const SignUpScreen: React.FC = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#FFFFFF',
   },
   topBar: {
     flexDirection: 'row',
@@ -678,6 +626,53 @@ const styles = StyleSheet.create({
     borderRadius: 45,
     borderWidth: 3,
     borderColor: '#4F46E5',
+  },
+  avatarPlaceholder: {
+    backgroundColor: '#EEF2FF',
+    borderStyle: 'dashed',
+    borderColor: '#C7D2FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarHint: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+    marginTop: 8,
+    marginBottom: 10,
+  },
+  photoActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  photoActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: borderRadius.full,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  photoActionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
+  removePhotoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  removePhotoText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#EF4444',
   },
   avatarEditBadge: {
     position: 'absolute',

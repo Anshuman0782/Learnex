@@ -1,10 +1,13 @@
-import React from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   Image,
+  ScrollView,
+  Dimensions,
+  Share,
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +17,8 @@ import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
 interface RecentVideosSectionProps {
   posts: CommunityPost[];
   onVideoPress?: (post: CommunityPost) => void;
@@ -21,211 +26,213 @@ interface RecentVideosSectionProps {
   onExploreMorePress?: () => void;
 }
 
+const parseDurationSeconds = (durationStr?: string): number => {
+  if (!durationStr) return 45;
+  const parts = durationStr.split(':').map((p) => parseInt(p, 10));
+  if (parts.length === 2) {
+    return (parts[0] || 0) * 60 + (parts[1] || 0);
+  }
+  return 45;
+};
+
 export const RecentVideosSection: React.FC<RecentVideosSectionProps> = ({
   posts,
   onVideoPress,
   onLikePress,
   onExploreMorePress,
 }) => {
-  const { openUserProfile } = useApp();
-  const videoPosts = posts
-    .filter((p) => p.postType === 'video' || !!p.videoThumbnail)
-    .slice(0, 2);
+  const { openUserProfile, toggleSavePost } = useApp();
+
+  const [activeIndex, setActiveIndex] = useState(0); // 0 = Long Videos, 1 = Shorts & Reels
+  const horizontalScrollRef = useRef<ScrollView>(null);
+
+  const [followedAuthors, setFollowedAuthors] = useState<Record<string, boolean>>({});
+
+  const allVideoPosts = posts.filter((p) => !p.repostedByName && p.postType === 'video' && !!p.videoUrl);
+
+  const longVideos = allVideoPosts.filter(
+    (p) => parseDurationSeconds(p.videoDuration) >= 60
+  );
+
+  const shortVideos = allVideoPosts.filter(
+    (p) => parseDurationSeconds(p.videoDuration) < 60
+  );
+
+  const handleTabPress = (index: number) => {
+    setActiveIndex(index);
+    horizontalScrollRef.current?.scrollTo({ x: index * (SCREEN_WIDTH - spacing.base * 2), animated: true });
+  };
+
+  const handleScroll = (e: any) => {
+    const offsetX = e.nativeEvent.contentOffset.x;
+    const page = Math.round(offsetX / (SCREEN_WIDTH - spacing.base * 2));
+    if (page !== activeIndex && (page === 0 || page === 1)) {
+      setActiveIndex(page);
+    }
+  };
+
+  const handleToggleFollow = (authorName: string) => {
+    setFollowedAuthors((prev) => {
+      const next = !prev[authorName];
+      Alert.alert(
+        next ? 'Following' : 'Unfollowed',
+        next ? `You are now following ${authorName}.` : `Removed ${authorName} from followed peers.`
+      );
+      return { ...prev, [authorName]: next };
+    });
+  };
+
+  const handleShare = async (post: CommunityPost) => {
+    try {
+      await Share.share({
+        message: `Check out this clip by ${post.authorName} on Lernex: "${post.videoTitle || post.content}"`,
+      });
+    } catch {
+      Alert.alert('Share', 'Share link copied! 🔗');
+    }
+  };
 
   const handlePlayVideo = (post: CommunityPost) => {
     if (onVideoPress) {
       onVideoPress(post);
     } else {
-      Alert.alert(
-        'Practice Video ▶',
-        `Playing "${post.videoTitle || post.content.substring(0, 40)}..."`
-      );
+      Alert.alert('Play Video', `Streaming "${post.videoTitle || post.content.substring(0, 30)}..."`);
     }
   };
 
+  const cardWidth = SCREEN_WIDTH - spacing.base * 2;
+
   return (
     <View style={styles.container}>
-      {/* Section Header */}
-      <View style={styles.sectionHeader}>
-        <View style={styles.titleRow}>
-          <Text style={styles.sectionTitle}>Recent Clips</Text>
-          <View style={styles.countBadge}>
-            <Text style={styles.countBadgeText}>2 New</Text>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={onExploreMorePress}
-          style={styles.exploreAllBtn}
-        >
-          <Text style={styles.exploreAllText}>See All</Text>
-          <Ionicons name="chevron-forward" size={13} color="#4F46E5" />
-        </TouchableOpacity>
-      </View>
-
-      {/* List of Recent Videos */}
       <View style={styles.videosList}>
-        {videoPosts.map((post) => {
-          const title = post.videoTitle || post.content.split('.')[0];
-          const hasMentorCritique = (post.mentorCritiqueCount || 0) > 0;
+        {longVideos.length > 0 ? (
+          longVideos.map((post) => {
+            const title = post.videoTitle || post.content.split('.')[0];
+            const viewsText =
+              post.viewsCount && post.viewsCount >= 1000
+                ? `${(post.viewsCount / 1000).toFixed(1)}k views`
+                : `${post.viewsCount ?? 0} views`;
 
-          return (
-            <View key={post.id} style={[styles.videoCard, shadows.card]}>
-              {/* Video Thumbnail */}
-              <TouchableOpacity
-                activeOpacity={0.9}
-                onPress={() => handlePlayVideo(post)}
-                style={styles.thumbnailContainer}
-              >
-                <Image
-                  source={{
-                    uri:
-                      post.videoThumbnail ||
-                      'https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=600',
-                  }}
-                  style={styles.thumbnailImage}
-                />
-
-                <LinearGradient
-                  colors={['rgba(15, 23, 42, 0.45)', 'transparent', 'rgba(15, 23, 42, 0.92)']}
-                  style={styles.thumbnailOverlay}
-                >
-                  {/* Top Floating Row */}
-                  <View style={styles.topRow}>
-                    <TouchableOpacity
-                      activeOpacity={0.8}
-                      onPress={(e) => {
-                        e.stopPropagation?.();
-                        openUserProfile({
-                          name: post.authorName,
-                          avatarUrl: post.authorAvatar,
-                          role: post.authorRole,
-                          specialty: post.authorSkill,
-                          badge: post.authorRole === 'Mentor' ? 'Verified Mentor' : 'Community Member',
-                        });
-                      }}
-                      style={styles.authorFloatingChip}
-                    >
-                      <Avatar
-                        uri={post.authorAvatar}
-                        name={post.authorName}
-                        size={22}
-                        showRing={false}
-                      />
-                      <Text style={styles.authorChipName} numberOfLines={1}>
-                        {post.authorName.split(' ')[0]}
-                      </Text>
-                      {post.authorRole === 'Mentor' && (
-                        <View style={styles.mentorCheckPill}>
-                          <Ionicons name="checkmark-circle" size={12} color="#7C3AED" />
-                        </View>
-                      )}
-                    </TouchableOpacity>
-
-                    <View style={styles.durationPill}>
-                      <Ionicons name="time-outline" size={11} color="#FFFFFF" />
-                      <Text style={styles.durationPillText}>
-                        {post.videoDuration || '0:45'}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Center Play Button */}
-                  <View style={styles.centerPlayHalo}>
-                    <LinearGradient
-                      colors={['#4F46E5', '#7C3AED']}
-                      style={styles.playButtonCircle}
-                    >
-                      <Ionicons name="play" size={22} color="#FFFFFF" style={{ marginLeft: 2 }} />
-                    </LinearGradient>
-                  </View>
-
-                  {/* Bottom Overlay Info */}
-                  <View style={styles.bottomInfoRow}>
-                    <View style={styles.bottomLeftCol}>
-                      <Text style={styles.videoTitleText} numberOfLines={1}>
-                        {title}
-                      </Text>
-                      <View style={styles.bottomBadgesRow}>
-                        <Text style={styles.tagBadgeText}>{post.tag?.split(' ')[0] || '#Clip'}</Text>
-                        {hasMentorCritique && (
-                          <View style={styles.critiqueStatusPill}>
-                            <Ionicons name="sparkles" size={10} color="#FDE047" />
-                            <Text style={styles.critiqueStatusText}>Mentor Reviewed</Text>
+                  return (
+                    <View key={post.id} style={styles.ytCard}>
+                      {/* 16:9 Thumbnail Container */}
+                      <TouchableOpacity
+                        activeOpacity={0.9}
+                        onPress={() => handlePlayVideo(post)}
+                        style={styles.ytThumbnailWrapper}
+                      >
+                        {post.videoThumbnail ? (
+                          <Image
+                            source={{ uri: post.videoThumbnail }}
+                            style={styles.ytThumbnailImage}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <View style={[styles.ytThumbnailImage, { backgroundColor: '#0F172A', alignItems: 'center', justifyContent: 'center' }]}>
+                            <Ionicons name="videocam" size={40} color="#334155" />
                           </View>
                         )}
+
+                        {/* YouTube Center Play Icon */}
+                        <View style={styles.ytCenterPlayBtn}>
+                          <Ionicons name="play" size={26} color="#FFFFFF" style={{ marginLeft: 3 }} />
+                        </View>
+
+                        {/* YouTube Duration Badge at Bottom Right */}
+                        <View style={styles.ytDurationBadge}>
+                          <Text style={styles.ytDurationBadgeText}>
+                            {post.videoDuration || '0:00'}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      {/* YouTube Card Metadata Row */}
+                      <View style={styles.ytMetaRow}>
+                        <TouchableOpacity
+                          activeOpacity={0.8}
+                          onPress={() =>
+                            openUserProfile({
+                              name: post.authorName,
+                              avatarUrl: post.authorAvatar,
+                              role: post.authorRole,
+                              specialty: post.authorSkill,
+                              badge: post.authorRole === 'Mentor' ? 'Verified Mentor' : 'Community Member',
+                            })
+                          }
+                          style={styles.ytAvatarBox}
+                        >
+                          <Avatar
+                            uri={post.authorAvatar}
+                            name={post.authorName}
+                            size={38}
+                            showRing={post.authorRole === 'Mentor'}
+                          />
+                        </TouchableOpacity>
+
+                        <View style={styles.ytMetaContent}>
+                          <Text style={styles.ytTitleText} numberOfLines={2}>
+                            {title}
+                          </Text>
+
+                          <View style={styles.ytSubInfoRow}>
+                            <Text style={styles.ytAuthorName} numberOfLines={1}>
+                              {post.authorName}
+                            </Text>
+                            {post.authorRole === 'Mentor' && (
+                              <Ionicons name="checkmark-circle" size={13} color="#6366F1" />
+                            )}
+                            <Text style={styles.ytDot}>•</Text>
+                            <Text style={styles.ytSubText}>{viewsText}</Text>
+                            <Text style={styles.ytDot}>•</Text>
+                            <Text style={styles.ytSubText}>{post.timeAgo}</Text>
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* Actions Row */}
+                      <View style={styles.ytActionsRow}>
+                        <TouchableOpacity
+                          activeOpacity={0.7}
+                          onPress={() => onLikePress?.(post.id)}
+                          style={[styles.ytActionBtn, post.isLiked && styles.ytActionBtnLiked]}
+                        >
+                          <Ionicons
+                            name={post.isLiked ? 'heart' : 'heart-outline'}
+                            size={15}
+                            color={post.isLiked ? '#EF4444' : '#64748B'}
+                          />
+                          <Text style={[styles.ytActionText, post.isLiked && { color: '#EF4444', fontWeight: 'bold' }]}>
+                            {post.likesCount}
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          activeOpacity={0.7}
+                          onPress={() => onVideoPress?.(post)}
+                          style={styles.ytActionBtn}
+                        >
+                          <Ionicons name="chatbubble-outline" size={14} color="#64748B" />
+                          <Text style={styles.ytActionText}>{post.commentsCount}</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          activeOpacity={0.85}
+                          onPress={() => handlePlayVideo(post)}
+                          style={styles.ytWatchBtn}
+                        >
+                          <Text style={styles.ytWatchBtnText}>Watch Video</Text>
+                          <Ionicons name="play-circle-outline" size={15} color="#4F46E5" />
+                        </TouchableOpacity>
                       </View>
                     </View>
-                  </View>
-                </LinearGradient>
-              </TouchableOpacity>
-
-              {/* Bottom Interactive Bar */}
-              <View style={styles.actionStatsBar}>
-                <View style={styles.statsLeft}>
-                  {/* Views */}
-                  <View style={styles.statPill}>
-                    <Ionicons name="eye-outline" size={13} color="#64748B" />
-                    <Text style={styles.statValue}>
-                      {post.viewsCount ? (post.viewsCount >= 1000 ? `${(post.viewsCount / 1000).toFixed(1)}k` : post.viewsCount) : '1.2k'}
-                    </Text>
-                  </View>
-
-                  {/* Comments */}
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => onVideoPress?.(post)}
-                    style={styles.statPill}
-                  >
-                    <Ionicons name="chatbubble-outline" size={13} color="#4F46E5" />
-                    <Text style={[styles.statValue, { color: '#4F46E5' }]}>
-                      {post.commentsCount}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* Like Button */}
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => onLikePress?.(post.id)}
-                    style={[styles.statPill, post.isLiked && styles.statPillLiked]}
-                  >
-                    <Ionicons
-                      name={post.isLiked ? 'heart' : 'heart-outline'}
-                      size={14}
-                      color={post.isLiked ? '#EF4444' : '#64748B'}
-                    />
-                    <Text
-                      style={[
-                        styles.statValue,
-                        post.isLiked && { color: '#EF4444', fontWeight: 'bold' },
-                      ]}
-                    >
-                      {post.likesCount}
-                    </Text>
-                  </TouchableOpacity>
+                  );
+                })
+              ) : (
+                <View style={styles.emptyBox}>
+                  <Ionicons name="videocam-outline" size={32} color="#94A3B8" />
+                  <Text style={styles.emptyTitle}>No Videos available</Text>
                 </View>
-
-                {/* Watch Button */}
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onPress={() => handlePlayVideo(post)}
-                  style={styles.watchPill}
-                >
-                  <LinearGradient
-                    colors={['#4F46E5', '#7C3AED']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.watchGradient}
-                  >
-                    <Text style={styles.watchText}>Watch</Text>
-                    <Ionicons name="play" size={10} color="#FFFFFF" />
-                  </LinearGradient>
-                </TouchableOpacity>
-              </View>
-            </View>
-          );
-        })}
+              )}
       </View>
     </View>
   );
@@ -236,213 +243,338 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.base,
     marginBottom: spacing.xl,
   },
-  sectionHeader: {
+  topTabBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    marginBottom: spacing.base,
   },
-  titleRow: {
-    flexDirection: 'row',
+  topTabItem: {
+    flex: 1,
     alignItems: 'center',
-    gap: 8,
+    paddingVertical: 10,
+    position: 'relative',
   },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
+  topTabText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748B',
   },
-  countBadge: {
-    backgroundColor: '#DCFCE7',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-  },
-  countBadgeText: {
-    fontSize: 10,
-    fontWeight: typography.weights.heavy,
-    color: '#15803D',
-  },
-  exploreAllBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  exploreAllText: {
-    fontSize: 12,
-    fontWeight: typography.weights.bold,
+  topTabTextActive: {
     color: '#4F46E5',
+    fontWeight: 'bold',
+  },
+  activeLine: {
+    position: 'absolute',
+    bottom: -1,
+    left: '20%',
+    right: '20%',
+    height: 3,
+    backgroundColor: '#4F46E5',
+    borderRadius: 1.5,
   },
   videosList: {
     gap: spacing.base,
   },
-  videoCard: {
+  // YouTube Cards
+  ytCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: borderRadius.xxl,
+    borderRadius: borderRadius.xl,
+    overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    overflow: 'hidden',
   },
-  thumbnailContainer: {
-    height: 165,
+  ytThumbnailWrapper: {
+    width: '100%',
+    height: 195,
     backgroundColor: '#0F172A',
     position: 'relative',
   },
-  thumbnailImage: {
+  ytThumbnailImage: {
     width: '100%',
     height: '100%',
   },
-  thumbnailOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'space-between',
-    padding: spacing.sm + 2,
-  },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  authorFloatingChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    paddingVertical: 3,
-    paddingHorizontal: 7,
-    borderRadius: borderRadius.full,
-    gap: 5,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-  },
-  authorChipName: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  mentorCheckPill: {
-    marginLeft: -2,
-  },
-  durationPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: borderRadius.full,
-    gap: 4,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.15)',
-  },
-  durationPillText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  centerPlayHalo: {
+  ytCenterPlayBtn: {
+    position: 'absolute',
     alignSelf: 'center',
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    top: '38%',
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.6)',
   },
-  playButtonCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bottomInfoRow: {
-    gap: 3,
-  },
-  bottomLeftCol: {
-    gap: 4,
-  },
-  videoTitleText: {
-    fontSize: 13,
-    fontWeight: typography.weights.bold,
-    color: '#FFFFFF',
-    textShadowColor: 'rgba(0,0,0,0.6)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
-  },
-  bottomBadgesRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  tagBadgeText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  ytDurationBadge: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
   },
-  critiqueStatusPill: {
+  ytDurationBadgeText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+  ytMetaRow: {
+    flexDirection: 'row',
+    padding: spacing.md,
+    gap: 12,
+  },
+  ytAvatarBox: {
+    marginTop: 2,
+  },
+  ytMetaContent: {
+    flex: 1,
+  },
+  ytTitleText: {
+    fontSize: 14,
+    fontWeight: typography.weights.bold,
+    color: '#0F172A',
+    lineHeight: 19,
+    marginBottom: 4,
+  },
+  ytSubInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(124, 58, 237, 0.9)',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-    gap: 3,
+    gap: 4,
+    flexWrap: 'wrap',
   },
-  critiqueStatusText: {
-    fontSize: 9,
-    fontWeight: typography.weights.heavy,
-    color: '#FFFFFF',
+  ytAuthorName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
   },
-  actionStatsBar: {
+  ytDot: {
+    fontSize: 11,
+    color: '#94A3B8',
+  },
+  ytSubText: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+  ytActionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.md,
-    paddingVertical: 10,
-    backgroundColor: '#FFFFFF',
+    paddingBottom: spacing.md,
   },
-  statsLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  statPill: {
+  ytActionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F8FAFC',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderRadius: borderRadius.full,
     gap: 4,
     borderWidth: 1,
     borderColor: '#F1F5F9',
   },
-  statPillLiked: {
+  ytActionBtnLiked: {
     backgroundColor: '#FEE2E2',
     borderColor: '#FECACA',
   },
-  statValue: {
+  ytActionText: {
     fontSize: 11,
     fontWeight: '600',
     color: '#475569',
   },
-  watchPill: {
-    borderRadius: borderRadius.full,
-    overflow: 'hidden',
-  },
-  watchGradient: {
+  ytWatchBtn: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#EEF2FF',
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: borderRadius.full,
     gap: 4,
   },
-  watchText: {
+  ytWatchBtnText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#4F46E5',
+  },
+  // Instagram Reels Cards
+  reelsList: {
+    gap: spacing.base,
+  },
+  instaReelContainer: {
+    height: 480,
+    borderRadius: borderRadius.xxl,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#0F172A',
+  },
+  instaReelMedia: {
+    width: '100%',
+    height: '100%',
+  },
+  instaVignette: {
+    ...StyleSheet.absoluteFill,
+  },
+  instaCenterPlayTouch: {
+    ...StyleSheet.absoluteFill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  instaPlayCircle: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+  },
+  instaRightDock: {
+    position: 'absolute',
+    right: 12,
+    bottom: 24,
+    alignItems: 'center',
+    gap: 14,
+    zIndex: 10,
+  },
+  dockAvatarBox: {
+    position: 'relative',
+    marginBottom: 4,
+  },
+  followPlusBadge: {
+    position: 'absolute',
+    bottom: -4,
+    alignSelf: 'center',
+    backgroundColor: '#EC4899',
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  followPlusBadgeActive: {
+    backgroundColor: '#10B981',
+  },
+  dockBtn: {
+    alignItems: 'center',
+    gap: 2,
+  },
+  dockIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dockIconLikedCircle: {
+    backgroundColor: 'rgba(239, 68, 68, 0.25)',
+  },
+  dockIconSavedCircle: {
+    backgroundColor: 'rgba(245, 158, 11, 0.25)',
+  },
+  dockText: {
     fontSize: 11,
     fontWeight: 'bold',
     color: '#FFFFFF',
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  vinylContainer: {
+    marginTop: 4,
+  },
+  vinylRing: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  instaBottomContent: {
+    position: 'absolute',
+    left: 14,
+    right: 75,
+    bottom: 20,
+    gap: 4,
+    zIndex: 10,
+  },
+  commTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  commPill: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
+  commPillText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#4F46E5',
+  },
+  tagPill: {
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
+  tagPillText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  authorHandle: {
+    fontSize: 14,
+    fontWeight: typography.weights.bold,
+    color: '#FFFFFF',
+    marginTop: 2,
+  },
+  reelTitleText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
+  reelCaptionText: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.85)',
+    lineHeight: 15,
+  },
+  audioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 4,
+  },
+  audioText: {
+    fontSize: 10,
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontWeight: '500',
+  },
+  emptyBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 30,
+    backgroundColor: '#FFFFFF',
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  emptyTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#64748B',
+    marginTop: 6,
   },
 });

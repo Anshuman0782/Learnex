@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,13 +9,27 @@ import {
   TextInput,
   Alert,
   Platform,
+  Image,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { UserRole } from '../../types';
+import { UserRole, CommunityPost } from '../../types';
+import { postKind, isMediaPost, postCover, POST_KIND_ICON } from '../../utils/postKind';
 import { Avatar } from './Avatar';
-import { CallModal } from './CallModal';
+import { FollowListModal } from '../profile/FollowListModal';
+import { MusicAnimation } from './NowPlayingBar';
+import { CritiqueModal } from '../community/CritiqueModal';
+import { ReelViewerModal } from './ReelViewerModal';
+import { getFeedRequest } from '../../api/posts.api';
 import { useApp } from '../../context/AppContext';
+import {
+  getUserProfileRequest,
+  followUserRequest,
+  unfollowUserRequest,
+  reportRequest,
+  type PublicProfile,
+} from '../../api/social.api';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 
 export interface UserProfileData {
@@ -34,6 +48,7 @@ export interface UserProfileData {
   completedSessions?: number;
   bio?: string;
   track?: string;
+  hobby?: string;
 }
 
 interface UserProfileModalProps {
@@ -47,22 +62,154 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   user,
   onClose,
 }) => {
-  const { showDialog } = useApp();
+  const { showDialog, openChatWith } = useApp();
   const [isBookingOpen, setIsBookingOpen] = useState(false);
-  const [isMessageOpen, setIsMessageOpen] = useState(false);
-  const [activeCallType, setActiveCallType] = useState<'voice' | 'video' | null>(null);
+
+  const [profile, setProfile] = useState<PublicProfile | null>(null);
+  const [followBusy, setFollowBusy] = useState(false);
+  const [followList, setFollowList] = useState<'followers' | 'following' | null>(null);
+
+  // Content tabs (About / Videos / Reels / Discuss) + filter + viewer.
+  const [tab, setTab] = useState<'about' | 'video' | 'reel' | 'discuss'>('about');
+  const [contentFilter, setContentFilter] = useState<'latest' | 'popular' | 'oldest'>('latest');
+  const [content, setContent] = useState<CommunityPost[]>([]);
+  const [contentLoading, setContentLoading] = useState(false);
+  const [viewPost, setViewPost] = useState<CommunityPost | null>(null);
+  const [reelViewer, setReelViewer] = useState<{ reels: CommunityPost[]; index: number } | null>(null);
+
+  // Load this user's public content once we know their id.
+  useEffect(() => {
+    if (!visible || !user?.id) {
+      setContent([]);
+      setTab('about');
+      return;
+    }
+    let active = true;
+    setContentLoading(true);
+    Promise.all([
+      getFeedRequest({ authorId: user.id }),
+      getFeedRequest({ authorId: user.id, shorts: true }),
+    ])
+      .then(([regular, shorts]) => {
+        if (!active) return;
+        const map = new Map<string, CommunityPost>();
+        [...regular, ...shorts].forEach((p) => map.set(p.id, p));
+        setContent(Array.from(map.values()));
+      })
+      .catch(() => active && setContent([]))
+      .finally(() => active && setContentLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [visible, user?.id]);
+
+  // Fetch the real profile (follow status + counts + bio) when opened.
+  useEffect(() => {
+    let active = true;
+    if (visible && user?.id) {
+      getUserProfileRequest(user.id)
+        .then((p) => active && setProfile(p))
+        .catch(() => active && setProfile(null));
+    } else {
+      setProfile(null);
+    }
+    return () => {
+      active = false;
+    };
+  }, [visible, user?.id]);
+
+  // Actually perform the follow/unfollow with an instant optimistic count update.
+  const doToggleFollow = async () => {
+    if (!user?.id || !profile || profile.isSelf) return;
+    setFollowBusy(true);
+    const wasFollowing = profile.isFollowing;
+    const prevCount = profile.followersCount;
+    // Optimistic: update the button + follower count immediately.
+    setProfile((p) =>
+      p
+        ? {
+            ...p,
+            isFollowing: !wasFollowing,
+            followersCount: Math.max(0, p.followersCount + (wasFollowing ? -1 : 1)),
+          }
+        : p,
+    );
+    try {
+      const res = wasFollowing
+        ? await unfollowUserRequest(user.id)
+        : await followUserRequest(user.id);
+      setProfile((p) =>
+        p ? { ...p, isFollowing: res.isFollowing, followersCount: res.followersCount } : p,
+      );
+    } catch {
+      // revert on failure
+      setProfile((p) => (p ? { ...p, isFollowing: wasFollowing, followersCount: prevCount } : p));
+    } finally {
+      setFollowBusy(false);
+    }
+  };
+
+  const handleToggleFollow = () => {
+    if (!user?.id || !profile || profile.isSelf) return;
+    // Unfollowing asks for confirmation first; following is instant.
+    if (profile.isFollowing) {
+      showDialog({
+        title: `Unfollow ${user.name}?`,
+        message: `You'll stop seeing ${user.name}'s new posts in your follow updates. You can follow again anytime.`,
+        icon: 'person-remove-outline',
+        confirmText: 'Unfollow',
+        cancelText: 'Cancel',
+        isDestructive: true,
+        onConfirm: () => {
+          void doToggleFollow();
+        },
+      });
+      return;
+    }
+    void doToggleFollow();
+  };
+
+  const handleReport = () => {
+    if (!user?.id) return;
+    showDialog({
+      title: 'Report User',
+      message: `Report ${user.name} for inappropriate behavior? Our team will review it.`,
+      icon: 'flag-outline',
+      confirmText: 'Report',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      onConfirm: () => {
+        reportRequest({ targetType: 'USER', reportedUserId: user.id, reason: 'Reported from profile' })
+          .then(() => showDialog({ title: 'Report Submitted', message: 'Thanks — our team will review it.', icon: 'checkmark-circle', confirmText: 'Done' }))
+          .catch(() => {});
+      },
+    });
+  };
+
+
   const [selectedSessionType, setSelectedSessionType] = useState('30m Technique Check');
   const [selectedSlot, setSelectedSlot] = useState('Tomorrow, 4:00 PM');
-  const [messageInput, setMessageInput] = useState('');
-  const [chatMessages, setChatMessages] = useState<Array<{ sender: 'them' | 'me'; text: string; time: string }>>([
-    { sender: 'them', text: 'Hey there! Thanks for reaching out. How can I help with your practice?', time: '2h ago' },
-  ]);
 
   if (!user) return null;
 
   const isMentor = Boolean(
     user.role === 'Mentor' || (user.name && user.name.toLowerCase().includes('mentor'))
   );
+
+  // Categorize + filter this user's content for the tabs.
+  const isReelPost = (p: CommunityPost) => !!p.isShort;
+  // Mirrors the composer: Posts (photo / video / audio) · Reels · Discuss (text).
+  const isVideoPost = (p: CommunityPost) => isMediaPost(p);
+  const isDiscussPost = (p: CommunityPost) => postKind(p) === 'discussion';
+
+  const contentForTab = content
+    .filter((p) => (tab === 'video' ? isVideoPost(p) : tab === 'reel' ? isReelPost(p) : tab === 'discuss' ? isDiscussPost(p) : false))
+    .sort((a, b) => {
+      if (contentFilter === 'popular') return (b.likesCount || 0) - (a.likesCount || 0);
+      // latest = as returned (newest first); oldest = reverse
+      return 0;
+    });
+  const displayContent = contentFilter === 'oldest' ? [...contentForTab].reverse() : contentForTab;
 
   const handleConfirmBooking = () => {
     setIsBookingOpen(false);
@@ -74,31 +221,14 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
     });
   };
 
-  const handleSendMessage = () => {
-    if (!messageInput.trim()) return;
-
-    const newMsg = {
-      sender: 'me' as const,
-      text: messageInput.trim(),
-      time: 'Just now',
-    };
-
-    setChatMessages((prev) => [...prev, newMsg]);
-    setMessageInput('');
-
-    // Simulate instant mentor/member reply
-    setTimeout(() => {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          sender: 'them',
-          text: isMentor
-            ? 'Got your message! Upload a short practice video clip and tag me so I can give you a timestamped critique.'
-            : 'Thanks for the encouragement! Keep practicing!',
-          time: 'Just now',
-        },
-      ]);
-    }, 1200);
+  /** Open the real 1:1 chat with this person (closes the profile sheet first). */
+  const handleMessage = () => {
+    if (!user.id) {
+      Alert.alert('Message unavailable', 'This profile can’t be messaged right now.');
+      return;
+    }
+    onClose();
+    openChatWith({ id: user.id, name: user.name, avatarUrl: user.avatarUrl, role: user.role });
   };
 
   return (
@@ -163,98 +293,203 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 </View>
               )}
 
-              <Text style={styles.bioText}>
-                {user.bio ||
-                  (isMentor
-                    ? 'Dedicated mentor helping students overcome technique hurdles, pitch issues, and breath control.'
-                    : 'Learning and sharing practice takes daily. Focusing on technique consistency!')}
-              </Text>
-            </View>
+              {(profile?.bio || user.bio) ? (
+                <Text style={styles.bioText}>{profile?.bio || user.bio}</Text>
+              ) : null}
 
-            {/* Member / Mentor Stats Grid */}
-            <View style={styles.statsSection}>
-              <Text style={styles.sectionHeading}>
-                {isMentor ? 'Mentor Impact & Reputation' : 'Member Practice Stats'}
-              </Text>
-
-              {isMentor ? (
-                /* Mentor Stats: 4-Grid */
-                <View style={styles.statsGrid}>
-                  <View style={[styles.statTile, shadows.soft]}>
-                    <View style={[styles.statIconBox, { backgroundColor: '#FEF3C7' }]}>
-                      <Ionicons name="star" size={16} color="#D97706" />
+              {profile && (
+                <>
+                  <View style={styles.followCountsRow}>
+                    <TouchableOpacity activeOpacity={0.7} onPress={() => setFollowList('followers')} style={styles.followCountItem}>
+                      <Text style={styles.followCountNum}>{profile.followersCount}</Text>
+                      <Text style={styles.followCountLabel}>Followers</Text>
+                    </TouchableOpacity>
+                    <View style={styles.followCountDivider} />
+                    <TouchableOpacity activeOpacity={0.7} onPress={() => setFollowList('following')} style={styles.followCountItem}>
+                      <Text style={styles.followCountNum}>{profile.followingCount}</Text>
+                      <Text style={styles.followCountLabel}>Following</Text>
+                    </TouchableOpacity>
+                    <View style={styles.followCountDivider} />
+                    <View style={styles.followCountItem}>
+                      <Text style={styles.followCountNum}>{profile.postsCount}</Text>
+                      <Text style={styles.followCountLabel}>Posts</Text>
                     </View>
-                    <Text style={styles.statBigValue}>{user.rating || 4.9} ★</Text>
-                    <Text style={styles.statLabel}>Rating (180+)</Text>
                   </View>
 
-                  <View style={[styles.statTile, shadows.soft]}>
-                    <View style={[styles.statIconBox, { backgroundColor: '#F3E8FF' }]}>
-                      <Ionicons name="videocam" size={16} color="#7C3AED" />
-                    </View>
-                    <Text style={styles.statBigValue}>{user.critiquesGiven || 245}</Text>
-                    <Text style={styles.statLabel}>Critiques Given</Text>
-                  </View>
-
-                  <View style={[styles.statTile, shadows.soft]}>
-                    <View style={[styles.statIconBox, { backgroundColor: '#EEF2FF' }]}>
-                      <Ionicons name="people" size={16} color="#4F46E5" />
-                    </View>
-                    <Text style={styles.statBigValue}>{user.studentsMentored || 85}</Text>
-                    <Text style={styles.statLabel}>Students Mentored</Text>
-                  </View>
-
-                  <View style={[styles.statTile, shadows.soft]}>
-                    <View style={[styles.statIconBox, { backgroundColor: '#DCFCE7' }]}>
-                      <Ionicons name="flash" size={16} color="#15803D" />
-                    </View>
-                    <Text style={[styles.statBigValue, { color: '#15803D' }]}>
-                      {user.responseTime || '< 2h'}
-                    </Text>
-                    <Text style={styles.statLabel}>Response Speed</Text>
-                  </View>
-                </View>
-              ) : (
-                /* Learner / Member Stats: 4-Grid */
-                <View style={styles.statsGrid}>
-                  <View style={[styles.statTile, shadows.soft]}>
-                    <View style={[styles.statIconBox, { backgroundColor: '#FFEDD5' }]}>
-                      <Ionicons name="flame" size={16} color="#EA580C" />
-                    </View>
-                    <Text style={[styles.statBigValue, { color: '#EA580C' }]}>
-                      {user.streakDays || 6}d
-                    </Text>
-                    <Text style={styles.statLabel}>Practice Streak</Text>
-                  </View>
-
-                  <View style={[styles.statTile, shadows.soft]}>
-                    <View style={[styles.statIconBox, { backgroundColor: '#EEF2FF' }]}>
-                      <Ionicons name="sparkles" size={16} color="#4F46E5" />
-                    </View>
-                    <Text style={styles.statBigValue}>{user.xpPoints || 1240}</Text>
-                    <Text style={styles.statLabel}>XP Points</Text>
-                  </View>
-
-                  <View style={[styles.statTile, shadows.soft]}>
-                    <View style={[styles.statIconBox, { backgroundColor: '#DCFCE7' }]}>
-                      <Ionicons name="checkmark-done" size={16} color="#15803D" />
-                    </View>
-                    <Text style={styles.statBigValue}>{user.completedSessions || 18}</Text>
-                    <Text style={styles.statLabel}>Sessions Logged</Text>
-                  </View>
-
-                  <View style={[styles.statTile, shadows.soft]}>
-                    <View style={[styles.statIconBox, { backgroundColor: '#FEF3C7' }]}>
-                      <Ionicons name="trophy" size={16} color="#D97706" />
-                    </View>
-                    <Text style={styles.statBigValue}>5</Text>
-                    <Text style={styles.statLabel}>Badges Earned</Text>
-                  </View>
-                </View>
+                  {!profile.isSelf && (
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={handleToggleFollow}
+                      disabled={followBusy}
+                      style={[styles.followBtn, profile.isFollowing && styles.followingBtn]}
+                    >
+                      <Ionicons
+                        name={profile.isFollowing ? 'checkmark' : 'person-add'}
+                        size={15}
+                        color={profile.isFollowing ? '#4F46E5' : '#FFFFFF'}
+                      />
+                      <Text style={[styles.followBtnText, profile.isFollowing && styles.followingBtnText]}>
+                        {profile.isFollowing ? 'Following' : 'Follow'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </>
               )}
             </View>
 
+
+            {/* Content tabs: About / Videos / Reels / Discuss */}
+            <View style={styles.profileTabs}>
+              {([
+                { key: 'about', label: 'About', icon: 'information-circle-outline' },
+                { key: 'video', label: 'Posts', icon: 'grid-outline' },
+                { key: 'reel', label: 'Reels', icon: 'play-circle-outline' },
+                { key: 'discuss', label: 'Discuss', icon: 'chatbubbles-outline' },
+              ] as const).map((t) => {
+                const active = tab === t.key;
+                return (
+                  <TouchableOpacity key={t.key} onPress={() => setTab(t.key)} style={[styles.profileTab, active && styles.profileTabActive]}>
+                    <Ionicons name={t.icon} size={15} color={active ? '#4F46E5' : '#94A3B8'} />
+                    <Text style={[styles.profileTabText, active && styles.profileTabTextActive]}>{t.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {tab === 'about' ? (
+              <View style={styles.aboutBox}>
+                <Text style={styles.aboutRowLabel}>Bio</Text>
+                <Text style={styles.aboutRowValue}>{profile?.bio || user.bio || 'No bio yet.'}</Text>
+                <View style={styles.aboutMetaRow}>
+                  {!!(profile?.hobby || user.hobby) && (
+                    <View style={styles.aboutChip}>
+                      <Ionicons name="sparkles" size={12} color="#4F46E5" />
+                      <Text style={styles.aboutChipText}>{profile?.hobby || user.hobby}</Text>
+                    </View>
+                  )}
+                  <View style={styles.aboutChip}>
+                    <Ionicons name={isMentor ? 'star' : 'school'} size={12} color="#4F46E5" />
+                    <Text style={styles.aboutChipText}>{isMentor ? 'Mentor' : 'Learner'}</Text>
+                  </View>
+                  {!!profile && (
+                    <View style={styles.aboutChip}>
+                      <Ionicons name="albums-outline" size={12} color="#4F46E5" />
+                      <Text style={styles.aboutChipText}>{profile.postsCount} posts</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            ) : (
+              <View style={styles.contentSection}>
+                {/* Filter row */}
+                <View style={styles.contentFilterRow}>
+                  {([
+                    { key: 'latest', label: 'Latest' },
+                    { key: 'popular', label: 'Popular' },
+                    { key: 'oldest', label: 'Oldest' },
+                  ] as const).map((f) => {
+                    const active = contentFilter === f.key;
+                    return (
+                      <TouchableOpacity key={f.key} onPress={() => setContentFilter(f.key)} style={[styles.contentFilterChip, active && styles.contentFilterChipActive]}>
+                        <Text style={[styles.contentFilterText, active && styles.contentFilterTextActive]}>{f.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {contentLoading ? (
+                  <Text style={styles.contentEmpty}>Loading…</Text>
+                ) : displayContent.length === 0 ? (
+                  <Text style={styles.contentEmpty}>
+                    No {tab === 'video' ? 'posts' : tab === 'reel' ? 'reels' : 'discussions'} yet.
+                  </Text>
+                ) : tab === 'reel' ? (
+                  /* Reels: 2-column grid of tall covers (Instagram-style). */
+                  <View style={styles.reelGrid}>
+                    {displayContent.map((p, i) => (
+                      <TouchableOpacity
+                        key={p.id}
+                        activeOpacity={0.85}
+                        onPress={() => setReelViewer({ reels: displayContent, index: i })}
+                        style={styles.reelCard}
+                      >
+                        {p.videoThumbnail ? (
+                          <Image source={{ uri: p.videoThumbnail }} style={styles.reelCover} />
+                        ) : (
+                          <LinearGradient colors={['#312E81', '#7C3AED', '#DB2777']} style={styles.reelCover}>
+                            <Ionicons name="play-circle" size={40} color="rgba(255,255,255,0.9)" />
+                          </LinearGradient>
+                        )}
+                        <LinearGradient
+                          colors={['transparent', 'rgba(15,23,42,0.85)']}
+                          style={styles.reelCoverOverlay}
+                        >
+                          <Text style={styles.reelCoverTitle} numberOfLines={1}>
+                            {p.videoTitle || p.content || 'Reel'}
+                          </Text>
+                          <View style={styles.reelCoverStats}>
+                            <Ionicons name="eye" size={11} color="#FFFFFF" />
+                            <Text style={styles.reelCoverStatText}>{p.viewsCount ?? 0}</Text>
+                            <Ionicons name="heart" size={11} color="#FFFFFF" style={{ marginLeft: 8 }} />
+                            <Text style={styles.reelCoverStatText}>{p.likesCount ?? 0}</Text>
+                          </View>
+                        </LinearGradient>
+                        <View style={styles.reelPlayBadge}>
+                          <Ionicons name="play" size={12} color="#FFFFFF" />
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                ) : (
+                  /* Videos & Discuss: list rows — left thumbnail, right title/date/stats. */
+                  <View style={styles.contentList}>
+                    {displayContent.map((p) => {
+                      const audio = p.postType === 'audio' || (!!p.audioUrl && !p.videoUrl);
+                      return (
+                        <TouchableOpacity key={p.id} activeOpacity={0.85} onPress={() => setViewPost(p)} style={styles.contentRow}>
+                          <View style={styles.rowThumb}>
+                            {postCover(p) ? (
+                              <Image source={{ uri: postCover(p) }} style={styles.rowThumbImg} />
+                            ) : audio ? (
+                              <View style={[styles.rowThumbImg, styles.rowThumbAudio]}>
+                                <MusicAnimation active={false} size={30} />
+                              </View>
+                            ) : (
+                              <View style={[styles.rowThumbImg, styles.rowThumbFallback]}>
+                                <Ionicons name={POST_KIND_ICON[postKind(p)] as any} size={22} color="#94A3B8" />
+                              </View>
+                            )}
+                            {tab === 'video' && (
+                              <View style={styles.rowPlayDot}>
+                                <Ionicons name={postKind(p) === 'photo' ? 'images' : postKind(p) === 'audio' ? 'musical-notes' : 'play'} size={12} color="#FFFFFF" />
+                              </View>
+                            )}
+                          </View>
+
+                          <View style={styles.rowInfo}>
+                            <Text style={styles.rowTitle} numberOfLines={2}>
+                              {p.videoTitle || p.content || 'Untitled'}
+                            </Text>
+                            <Text style={styles.rowDate}>{p.timeAgo}</Text>
+                            <View style={styles.rowStats}>
+                              <Ionicons name="eye-outline" size={12} color="#94A3B8" />
+                              <Text style={styles.rowStatText}>{p.viewsCount ?? 0}</Text>
+                              <Ionicons name="heart-outline" size={12} color="#94A3B8" style={{ marginLeft: 10 }} />
+                              <Text style={styles.rowStatText}>{p.likesCount ?? 0}</Text>
+                              <Ionicons name="chatbubble-outline" size={12} color="#94A3B8" style={{ marginLeft: 10 }} />
+                              <Text style={styles.rowStatText}>{p.commentsCount ?? p.comments?.length ?? 0}</Text>
+                            </View>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+            )}
+
             {/* Action Buttons: 4 Equal Balanced Actions for Mentor; Message + Calls for Learner */}
+            {!profile?.isSelf && (
             <View style={styles.actionButtonsContainer}>
               {isMentor ? (
                 /* Mentor 2x2 Balanced Action Grid */
@@ -279,7 +514,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
 
                     <TouchableOpacity
                       activeOpacity={0.88}
-                      onPress={() => setIsMessageOpen(true)}
+                      onPress={handleMessage}
                       style={styles.gridBtn}
                     >
                       <LinearGradient
@@ -294,47 +529,13 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                     </TouchableOpacity>
                   </View>
 
-                  {/* Row 2: Video Call & Voice Call */}
-                  <View style={styles.actionGridRow}>
-                    <TouchableOpacity
-                      activeOpacity={0.88}
-                      onPress={() => setActiveCallType('video')}
-                      style={styles.gridBtn}
-                    >
-                      <LinearGradient
-                        colors={['#2563EB', '#1D4ED8']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={styles.gridBtnGradient}
-                      >
-                        <Ionicons name="videocam" size={16} color="#FFFFFF" />
-                        <Text style={styles.gridBtnText}>Video Call</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      activeOpacity={0.88}
-                      onPress={() => setActiveCallType('voice')}
-                      style={styles.gridBtn}
-                    >
-                      <LinearGradient
-                        colors={['#059669', '#047857']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={styles.gridBtnGradient}
-                      >
-                        <Ionicons name="call" size={15} color="#FFFFFF" />
-                        <Text style={styles.gridBtnText}>Voice Call</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </View>
                 </View>
               ) : (
                 /* Learner Actions */
                 <View style={styles.actionGridContainer}>
                   <TouchableOpacity
                     activeOpacity={0.88}
-                    onPress={() => setIsMessageOpen(true)}
+                    onPress={handleMessage}
                     style={styles.memberMessageBtn}
                   >
                     <LinearGradient
@@ -348,42 +549,10 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                     </LinearGradient>
                   </TouchableOpacity>
 
-                  <View style={styles.actionGridRow}>
-                    <TouchableOpacity
-                      activeOpacity={0.88}
-                      onPress={() => setActiveCallType('video')}
-                      style={styles.gridBtn}
-                    >
-                      <LinearGradient
-                        colors={['#2563EB', '#1D4ED8']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={styles.gridBtnGradient}
-                      >
-                        <Ionicons name="videocam" size={16} color="#FFFFFF" />
-                        <Text style={styles.gridBtnText}>Video Call</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      activeOpacity={0.88}
-                      onPress={() => setActiveCallType('voice')}
-                      style={styles.gridBtn}
-                    >
-                      <LinearGradient
-                        colors={['#059669', '#047857']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={styles.gridBtnGradient}
-                      >
-                        <Ionicons name="call" size={15} color="#FFFFFF" />
-                        <Text style={styles.gridBtnText}>Voice Call</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </View>
                 </View>
               )}
             </View>
+            )}
           </ScrollView>
 
           {/* ================= MODAL 1: BOOK SESSION SHEET ================= */}
@@ -473,85 +642,30 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
             </View>
           </Modal>
 
-          {/* ================= MODAL 2: DIRECT MESSAGE CHAT SHEET ================= */}
-          <Modal visible={isMessageOpen} animationType="slide" transparent onRequestClose={() => setIsMessageOpen(false)}>
-            <View style={styles.innerBackdrop}>
-              <View style={styles.chatSheet}>
-                <View style={styles.dragHandle} />
-                <View style={styles.chatHeaderRow}>
-                  <View style={styles.chatUserRow}>
-                    <Avatar uri={user.avatarUrl} name={user.name} size={36} showRing={isMentor} />
-                    <View style={styles.chatUserMeta}>
-                      <Text style={styles.chatUserName}>{user.name}</Text>
-                      <Text style={styles.chatUserRole}>
-                        {isMentor ? '✨ Verified Mentor • Active' : '🎓 Community Member'}
-                      </Text>
-                    </View>
-                  </View>
 
-                  <TouchableOpacity onPress={() => setIsMessageOpen(false)}>
-                    <Ionicons name="close" size={20} color="#64748B" />
-                  </TouchableOpacity>
-                </View>
-
-                {/* Chat History */}
-                <ScrollView contentContainerStyle={styles.chatMessagesScroll}>
-                  {chatMessages.map((msg, idx) => (
-                    <View
-                      key={idx}
-                      style={[
-                        styles.chatBubble,
-                        msg.sender === 'me' ? styles.myBubble : styles.theirBubble,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.chatBubbleText,
-                          msg.sender === 'me' ? styles.myBubbleText : styles.theirBubbleText,
-                        ]}
-                      >
-                        {msg.text}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.chatBubbleTime,
-                          msg.sender === 'me' ? styles.myBubbleTime : styles.theirBubbleTime,
-                        ]}
-                      >
-                        {msg.time}
-                      </Text>
-                    </View>
-                  ))}
-                </ScrollView>
-
-                {/* Message Input Box */}
-                <View style={styles.chatInputRow}>
-                  <TextInput
-                    value={messageInput}
-                    onChangeText={setMessageInput}
-                    placeholder={`Message ${user.name.split(' ')[0]}...`}
-                    placeholderTextColor="#94A3B8"
-                    style={styles.chatTextInput}
-                  />
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    onPress={handleSendMessage}
-                    style={styles.chatSendBtn}
-                  >
-                    <Ionicons name="arrow-up" size={18} color="#FFFFFF" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          </Modal>
-
-          {/* ================= MODAL 3: VIDEO / VOICE CALL SIMULATOR ================= */}
-          <CallModal
-            visible={!!activeCallType}
-            user={user}
-            callType={activeCallType || 'voice'}
-            onClose={() => setActiveCallType(null)}
+          {/* Followers / Following list for this profile */}
+          <FollowListModal
+            visible={!!followList}
+            userId={user?.id ?? null}
+            mode={followList ?? 'followers'}
+            onClose={() => setFollowList(null)}
           />
+
+          {/* Video / Discuss viewer (video plays inline, comments, etc.) */}
+          <CritiqueModal
+            visible={!!viewPost}
+            post={viewPost}
+            onClose={() => setViewPost(null)}
+          />
+
+          {/* Reels open in full reel format (Instagram-style vertical viewer) */}
+          <ReelViewerModal
+            visible={!!reelViewer}
+            reels={reelViewer?.reels ?? []}
+            startIndex={reelViewer?.index ?? 0}
+            onClose={() => setReelViewer(null)}
+          />
+
         </View>
       </View>
     </Modal>
@@ -677,6 +791,162 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingHorizontal: spacing.base,
   },
+  profileTabs: {
+    flexDirection: 'row',
+    backgroundColor: '#F1F5F9',
+    borderRadius: borderRadius.lg,
+    padding: 3,
+    gap: 2,
+    marginBottom: spacing.sm,
+  },
+  profileTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    borderRadius: borderRadius.md,
+  },
+  profileTabActive: { backgroundColor: '#FFFFFF' },
+  profileTabText: { fontSize: 11, fontWeight: '600', color: '#94A3B8' },
+  profileTabTextActive: { color: '#4F46E5', fontWeight: 'bold' },
+  aboutBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: borderRadius.xl,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: '#EEF2F7',
+    marginBottom: spacing.sm,
+  },
+  aboutRowLabel: { fontSize: 11, fontWeight: '700', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.4 },
+  aboutRowValue: { fontSize: 14, color: '#334155', lineHeight: 20, marginTop: 6 },
+  aboutMetaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  aboutChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+  },
+  aboutChipText: { fontSize: 12, fontWeight: '600', color: '#4338CA' },
+  contentSection: { marginBottom: spacing.sm },
+  contentFilterRow: { flexDirection: 'row', gap: 8, marginBottom: spacing.sm },
+  contentFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+    backgroundColor: '#F1F5F9',
+  },
+  contentFilterChipActive: { backgroundColor: '#4F46E5' },
+  contentFilterText: { fontSize: 12, fontWeight: '600', color: '#64748B' },
+  contentFilterTextActive: { color: '#FFFFFF', fontWeight: 'bold' },
+  contentEmpty: { fontSize: 12, color: '#94A3B8', textAlign: 'center', paddingVertical: 24 },
+  // Videos & Discuss — list rows (left thumbnail + right details)
+  contentList: { gap: 12 },
+  contentRow: {
+    flexDirection: 'row',
+    gap: 12,
+    backgroundColor: '#F8FAFC',
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: '#EEF2F7',
+    padding: 8,
+  },
+  rowThumb: {
+    width: 120,
+    height: 74,
+    borderRadius: borderRadius.md,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#F1F5F9',
+  },
+  rowThumbImg: { width: 120, height: 74 },
+  rowThumbAudio: { backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  rowThumbFallback: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#E2E8F0' },
+  rowPlayDot: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    marginTop: -14,
+    marginLeft: -14,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowInfo: { flex: 1, justifyContent: 'center', gap: 3 },
+  rowTitle: { fontSize: 13, fontWeight: '700', color: '#0F172A', lineHeight: 18 },
+  rowDate: { fontSize: 11, color: '#94A3B8' },
+  rowStats: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
+  rowStatText: { fontSize: 11, color: '#94A3B8', fontWeight: '600' },
+  // Reels — 2-column grid of tall covers
+  reelGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  reelCard: {
+    width: '47%',
+    flexGrow: 1,
+    aspectRatio: 0.62,
+    borderRadius: borderRadius.lg,
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: '#1E1B4B',
+  },
+  reelCover: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' },
+  reelCoverOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    padding: 8,
+    gap: 3,
+  },
+  reelCoverTitle: { fontSize: 12, fontWeight: '700', color: '#FFFFFF' },
+  reelCoverStats: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  reelCoverStatText: { fontSize: 10, color: '#FFFFFF', fontWeight: '600' },
+  reelPlayBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  followCountsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+    gap: 4,
+  },
+  followCountItem: { alignItems: 'center', paddingHorizontal: 16 },
+  followCountNum: { fontSize: 16, fontWeight: typography.weights.bold, color: '#0F172A' },
+  followCountLabel: { fontSize: 11, color: '#64748B', marginTop: 1 },
+  followCountDivider: { width: 1, height: 24, backgroundColor: '#E2E8F0' },
+  followBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 14,
+    paddingVertical: 9,
+    paddingHorizontal: 28,
+    borderRadius: borderRadius.full,
+    backgroundColor: '#4F46E5',
+  },
+  followingBtn: {
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  followBtnText: { fontSize: 13, fontWeight: typography.weights.bold, color: '#FFFFFF' },
+  followingBtnText: { color: '#4F46E5' },
   statsSection: {
     gap: 8,
   },

@@ -1,7 +1,27 @@
-import { MentorQuestion } from '../types';
+/**
+ * Mentor qualification question bank — SERVER ONLY.
+ * `correctIndex` and `explanation` never leave the backend until a quiz is
+ * graded, so the answer key can't be read from the app bundle.
+ */
+export interface MentorQuestion {
+  id: string;
+  category: string;
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+}
+
+/** Public shape sent to the client when starting a quiz (no answers). */
+export interface PublicMentorQuestion {
+  id: string;
+  category: string;
+  question: string;
+  options: string[];
+}
 
 export const MENTOR_QUIZ_POOL: MentorQuestion[] = [
-  // Music & Vocal Mentorship Questions
+  // Music & Vocal
   {
     id: 'q-m-1',
     category: 'Music',
@@ -68,7 +88,7 @@ export const MENTOR_QUIZ_POOL: MentorQuestion[] = [
     explanation: 'Diaphragmatic support provides steady air flow without engaging constrictor muscles.',
   },
 
-  // Coding & Software Mentorship Questions
+  // Coding & Software
   {
     id: 'q-c-1',
     category: 'Coding',
@@ -99,12 +119,7 @@ export const MENTOR_QUIZ_POOL: MentorQuestion[] = [
     id: 'q-c-3',
     category: 'Coding',
     question: 'What is the time complexity of looking up a key in a standard Hash Map (average case)?',
-    options: [
-      'O(n^2)',
-      'O(n log n)',
-      'O(1)',
-      'O(log n)',
-    ],
+    options: ['O(n^2)', 'O(n log n)', 'O(1)', 'O(log n)'],
     correctIndex: 2,
     explanation: 'Hash maps provide constant time average lookup O(1).',
   },
@@ -112,12 +127,7 @@ export const MENTOR_QUIZ_POOL: MentorQuestion[] = [
     id: 'q-c-4',
     category: 'Coding',
     question: 'When mentoring on RESTful API design, which HTTP method should be recommended for partial updates?',
-    options: [
-      'GET',
-      'DELETE',
-      'PATCH',
-      'HEAD',
-    ],
+    options: ['GET', 'DELETE', 'PATCH', 'HEAD'],
     correctIndex: 2,
     explanation: 'PATCH applies partial modifications to a resource.',
   },
@@ -135,17 +145,12 @@ export const MENTOR_QUIZ_POOL: MentorQuestion[] = [
     explanation: 'Immutability ensures predictable state changes and triggers appropriate re-renders.',
   },
 
-  // Design & General Mentorship Questions
+  // Design & General Mentorship
   {
     id: 'q-d-1',
     category: 'Design',
     question: 'According to WCAG accessibility guidelines, what is the minimum contrast ratio for standard body text?',
-    options: [
-      '1.5:1',
-      '4.5:1',
-      '10:1',
-      '2.1:1',
-    ],
+    options: ['1.5:1', '4.5:1', '10:1', '2.1:1'],
     correctIndex: 1,
     explanation: 'WCAG AA requires a minimum contrast ratio of 4.5:1 for normal text.',
   },
@@ -178,27 +183,19 @@ export const MENTOR_QUIZ_POOL: MentorQuestion[] = [
 ];
 
 /**
- * Returns a randomized set of 5 questions tailored to the hobby or domain.
+ * Returns a randomized set of questions tailored to a hobby/domain,
+ * preferring category matches first, then filling from the rest.
  */
-export const getRandomMentorQuestions = (hobby?: string, count: number = 5): MentorQuestion[] => {
+export function getRandomMentorQuestions(hobby: string | null | undefined, count: number): MentorQuestion[] {
   const hobbyClean = (hobby || 'Music').toLowerCase();
-
-  // First pick questions related to the user's selected hobby
-  const relevant = MENTOR_QUIZ_POOL.filter(
-    (q) => q.category.toLowerCase() === hobbyClean
-  );
-
-  // Other questions from pool
-  const others = MENTOR_QUIZ_POOL.filter(
-    (q) => q.category.toLowerCase() !== hobbyClean
-  );
-
-  // Shuffle arrays
   const shuffle = <T>(arr: T[]): T[] => [...arr].sort(() => Math.random() - 0.5);
 
-  const shuffledRelevant = shuffle(relevant);
-  const shuffledOthers = shuffle(others);
+  const relevant = shuffle(MENTOR_QUIZ_POOL.filter((q) => q.category.toLowerCase() === hobbyClean));
+  const others = shuffle(MENTOR_QUIZ_POOL.filter((q) => q.category.toLowerCase() !== hobbyClean));
 
-  const combined = [...shuffledRelevant, ...shuffledOthers];
-  return combined.slice(0, count);
-};
+  return [...relevant, ...others].slice(0, count);
+}
+
+export function findQuestionById(id: string): MentorQuestion | undefined {
+  return MENTOR_QUIZ_POOL.find((q) => q.id === id);
+}

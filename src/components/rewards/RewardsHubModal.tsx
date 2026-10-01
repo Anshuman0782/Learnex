@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -6,709 +6,610 @@ import {
   Modal,
   ScrollView,
   TouchableOpacity,
-  Image,
   Alert,
-  Platform,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '../../context/AppContext';
 import { RewardClaimModal } from './RewardClaimModal';
-import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
-import { XPLeaderboardEntry, SeasonRewardItem } from '../../types';
+import {
+  getXpRulesRequest,
+  getXpHistoryRequest,
+  type ApiUserStats,
+  type XpHistoryRow,
+  type XpRulebook,
+  type XpRuleView,
+} from '../../api/gamification.api';
+import { borderRadius, shadows, spacing, typography } from '../../theme';
+import { XPTask } from '../../types';
+
+type HubTab = 'quests' | 'activity' | 'rewards' | 'rules';
+type Board = 'Learner' | 'Mentor';
 
 interface RewardsHubModalProps {
   visible: boolean;
   onClose: () => void;
-  initialTab?: 'leaderboard' | 'quests' | 'rewards' | 'rules';
+  initialTab?: HubTab;
+}
+
+const CATEGORY_ICON: Record<string, keyof typeof Ionicons.glyphMap> = {
+  Consistency: 'flame-outline',
+  Practice: 'musical-notes-outline',
+  Community: 'people-outline',
+  Mentoring: 'ribbon-outline',
+  Milestones: 'flag-outline',
+};
+
+/** "Oct 1, 5:30 AM" in the viewer's local time. */
+function formatLocal(iso?: string): string {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function timeAgo(iso: string): string {
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'yesterday' : `${d}d ago`;
 }
 
 export const RewardsHubModal: React.FC<RewardsHubModalProps> = ({
   visible,
   onClose,
-  initialTab = 'leaderboard',
+  initialTab = 'quests',
 }) => {
   const insets = useSafeAreaInsets();
   const {
     user,
     selectedRole,
     seasonCycle,
-    mentorLeaderboard,
-    learnerLeaderboard,
     xpTasks,
     seasonRewards,
     claimXPTask,
+    userStats,
+    xpRulesVersion,
     activeRewardClaimModal,
     openRewardClaimModal,
     closeRewardClaimModal,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'leaderboard' | 'quests' | 'rewards' | 'rules'>(
-    initialTab
-  );
-  const [leaderboardTrack, setLeaderboardTrack] = useState<'learner' | 'mentor'>(
-    selectedRole === 'Mentor' ? 'mentor' : 'learner'
-  );
-  const [questRoleFilter, setQuestRoleFilter] = useState<'Learner' | 'Mentor'>(
-    (selectedRole as 'Learner' | 'Mentor') || 'Learner'
-  );
+  const myBoard: Board = selectedRole === 'Mentor' ? 'Mentor' : 'Learner';
+  const stats = userStats as ApiUserStats | null;
 
-  const activeLeaderboard =
-    leaderboardTrack === 'mentor' ? mentorLeaderboard : learnerLeaderboard;
+  const [tab, setTab] = useState<HubTab>(initialTab);
+  const [rulesFor, setRulesFor] = useState<Board>(myBoard);
+  const [rulebook, setRulebook] = useState<XpRulebook | null>(null);
+  const [history, setHistory] = useState<XpHistoryRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
 
-  const top1 = activeLeaderboard.find((e) => e.rank === 1);
-  const top2 = activeLeaderboard.find((e) => e.rank === 2);
-  const top3 = activeLeaderboard.find((e) => e.rank === 3);
-  const restList = activeLeaderboard.filter((e) => e.rank > 3);
+  const load = useCallback(async () => {
+    const [rb, hist] = await Promise.allSettled([getXpRulesRequest(), getXpHistoryRequest(40)]);
+    if (rb.status === 'fulfilled') setRulebook(rb.value);
+    if (hist.status === 'fulfilled') setHistory(hist.value);
+  }, []);
 
-  const filteredTasks = xpTasks.filter(
-    (t) => t.role === questRoleFilter || t.role === 'Both'
-  );
+  // Load when opened, and again whenever an admin changes the rules.
+  useEffect(() => {
+    if (!visible) return;
+    setTab(initialTab);
+    setRulesFor(myBoard);
+    setLoading(true);
+    load().finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
-  const handleClaimXP = (taskId: string) => {
-    const res = claimXPTask(taskId);
+  useEffect(() => {
+    if (visible && xpRulesVersion > 0) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [xpRulesVersion]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
+
+  const handleClaim = async (task: XPTask) => {
+    setClaimingId(task.id);
+    const res = await claimXPTask(task.id);
+    setClaimingId(null);
     if (res) {
-      Alert.alert(
-        'XP Claimed',
-        `You gained +${res.earnedXP} XP for "${res.taskTitle}". Your leaderboard position has risen.`
-      );
+      Alert.alert('XP claimed', `+${res.earnedXP} XP for “${res.taskTitle}”.`);
+      getXpHistoryRequest(40).then(setHistory).catch(() => {});
+    } else {
+      Alert.alert('Could not claim', 'This quest isn’t complete yet, or it was already claimed.');
     }
   };
 
+  // ----- derived -----
+  const seasonXp = user?.seasonXp ?? stats?.seasonXp ?? 0;
+  const seasonRank = user?.seasonRank ?? stats?.seasonRank ?? 0;
+  const rankTotal = stats?.seasonRankTotal ?? 0;
+  const level = stats?.level ?? user?.level ?? 1;
+  const levelTitle = stats?.levelBadge ?? user?.levelBadge ?? 'Newcomer';
+  const into = stats?.xpIntoLevel ?? 0;
+  const need = stats?.xpForNextLevel ?? 0;
+  const levelPct = need > 0 ? Math.min(100, Math.round((into / need) * 100)) : 0;
+  const resetAt = rulebook?.season.endsAt ?? seasonCycle.endsAt;
+  const daysLeft = rulebook?.season.daysLeft ?? seasonCycle.daysLeft;
+
+  const dailyQuests = xpTasks.filter((t) => t.category === 'daily');
+  const weeklyQuests = xpTasks.filter((t) => t.category === 'weekly');
+
+  const rulesForBoard = useMemo(() => {
+    const rules = (rulebook?.rules ?? []).filter((r) => r.role === 'Both' || r.role === rulesFor);
+    const groups = new Map<string, XpRuleView[]>();
+    for (const r of rules) {
+      const list = groups.get(r.category) ?? [];
+      list.push(r);
+      groups.set(r.category, list);
+    }
+    return [...groups.entries()];
+  }, [rulebook, rulesFor]);
+
+  const questsForBoard = (rulebook?.quests ?? []).filter((q) => q.role === rulesFor);
+  const historyThisSeason = history.filter((h) => h.thisSeason);
+  const historyEarlier = history.filter((h) => !h.thisSeason);
+
+  // ----- render helpers -----
+  const renderQuest = (task: XPTask) => {
+    const pct = task.progress?.total
+      ? Math.min(100, Math.round((task.progress.current / task.progress.total) * 100))
+      : 0;
+    return (
+      <View key={task.id} style={[styles.card, shadows.soft]}>
+        <View style={styles.questTop}>
+          <View style={[styles.questIcon, { backgroundColor: task.iconBg }]}>
+            <Ionicons name={task.icon as keyof typeof Ionicons.glyphMap} size={19} color={task.iconColor} />
+          </View>
+          <View style={styles.flex1}>
+            <Text style={styles.questTitle}>{task.title}</Text>
+            <Text style={styles.questDesc}>{task.description}</Text>
+          </View>
+          <View style={styles.xpPill}>
+            <Text style={styles.xpPillText}>+{task.xpReward} XP</Text>
+          </View>
+        </View>
+
+        {task.progress && (
+          <View style={styles.progressBlock}>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${pct}%` }]} />
+            </View>
+            <Text style={styles.progressText}>
+              {task.progress.current}/{task.progress.total} {task.progress.unit}
+            </Text>
+          </View>
+        )}
+
+        <View style={styles.questBottom}>
+          {task.completed ? (
+            <View style={styles.doneBadge}>
+              <Ionicons name="checkmark-circle" size={14} color="#16A34A" />
+              <Text style={styles.doneText}>Claimed</Text>
+            </View>
+          ) : task.claimable ? (
+            <TouchableOpacity
+              activeOpacity={0.85}
+              disabled={claimingId === task.id}
+              onPress={() => handleClaim(task)}
+              style={styles.claimBtn}
+            >
+              <LinearGradient colors={['#4F46E5', '#7C3AED']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.claimGradient}>
+                {claimingId === task.id ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="flash" size={13} color="#FFFFFF" />
+                    <Text style={styles.claimText}>Claim +{task.xpReward} XP</Text>
+                  </>
+                )}
+              </LinearGradient>
+            </TouchableOpacity>
+          ) : (
+            <Text style={styles.inProgress}>In progress</Text>
+          )}
+        </View>
+      </View>
+    );
+  };
+
+  const renderHistoryRow = (h: XpHistoryRow) => (
+    <View key={h.id} style={styles.historyRow}>
+      <View style={styles.historyIcon}>
+        <Ionicons name={h.icon as keyof typeof Ionicons.glyphMap} size={16} color="#4F46E5" />
+      </View>
+      <View style={styles.flex1}>
+        <Text style={styles.historyLabel} numberOfLines={1}>{h.label}</Text>
+        <Text style={styles.historyTime}>{timeAgo(h.createdAt)}</Text>
+      </View>
+      <Text style={[styles.historyAmount, h.amount < 0 && { color: '#DC2626' }]}>
+        {h.amount > 0 ? '+' : ''}{h.amount} XP
+      </Text>
+    </View>
+  );
+
+  const renderRule = (r: XpRuleView) => (
+    <View key={r.key} style={styles.ruleRow}>
+      <View style={styles.flex1}>
+        <View style={styles.ruleTitleRow}>
+          <Text style={styles.ruleTitle}>{r.title}</Text>
+          {r.isCore && (
+            <View style={styles.coreChip}>
+              <Ionicons name="lock-closed" size={9} color="#475569" />
+              <Text style={styles.coreChipText}>Fixed</Text>
+            </View>
+          )}
+        </View>
+        <Text style={styles.ruleDesc}>{r.description}</Text>
+        <Text style={styles.ruleCap}>
+          {r.dailyCap ? `Up to ${r.dailyCap}× per day` : 'No daily limit'}
+          {r.role !== 'Both' ? ` · ${r.role}s only` : ''}
+        </Text>
+      </View>
+      <Text style={styles.ruleXp}>+{r.xp}</Text>
+    </View>
+  );
+
+  const Bullets = ({ items, color }: { items: string[]; color: string }) => (
+    <View style={styles.bullets}>
+      {items.map((t, i) => (
+        <View key={i} style={styles.bulletRow}>
+          <Ionicons name="checkmark-circle" size={14} color={color} style={{ marginTop: 1 }} />
+          <Text style={styles.bulletText}>{t}</Text>
+        </View>
+      ))}
+    </View>
+  );
+
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={[styles.container, { paddingTop: Math.max(insets.top, 12) }]}>
-        {/* Top Header Bar */}
+        {/* Top bar */}
         <View style={styles.topBar}>
-          <TouchableOpacity
-            activeOpacity={0.7}
-            onPress={onClose}
-            style={styles.backCircleBtn}
-          >
+          <TouchableOpacity activeOpacity={0.7} onPress={onClose} style={styles.iconBtn}>
             <Ionicons name="arrow-back" size={20} color="#0F172A" />
           </TouchableOpacity>
+          <View style={styles.topTitleBox}>
+            <Text style={styles.topKicker}>SEASON {seasonCycle.seasonNumber}</Text>
+            <Text style={styles.topTitle}>XP & Rankings</Text>
+          </View>
+          <View style={styles.iconBtnGhost} />
+        </View>
 
-          <View style={styles.topBarTitleBox}>
-            <View style={styles.topBadgeRow}>
-              <Ionicons name="trophy" size={14} color="#D97706" />
-              <Text style={styles.topBarSub}>SEASON 3 REWARDS & XP</Text>
-            </View>
-            <Text style={styles.topBarTitle}>Rewards & Rankings</Text>
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 40, 60) }}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          stickyHeaderIndices={[1]}
+        >
+          {/* Hero */}
+          <View style={styles.heroWrap}>
+            <LinearGradient colors={['#1E1B4B', '#4338CA', '#6D28D9']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
+              <View style={styles.heroTopRow}>
+                <View style={styles.timerPill}>
+                  <Ionicons name="time" size={12} color="#FDE047" />
+                  <Text style={styles.timerText}>
+                    {daysLeft} {daysLeft === 1 ? 'DAY' : 'DAYS'} LEFT
+                  </Text>
+                </View>
+                {!!resetAt && <Text style={styles.resetText}>Resets {formatLocal(resetAt)}</Text>}
+              </View>
+
+              <Text style={styles.heroTitle}>{seasonCycle.title}</Text>
+              <Text style={styles.heroSub}>{seasonCycle.subtitle}</Text>
+
+              <View style={styles.standingRow}>
+                <View style={styles.standingCell}>
+                  <Text style={styles.standingNum}>{seasonXp}</Text>
+                  <Text style={styles.standingLabel}>XP this month</Text>
+                </View>
+                <View style={styles.standingDivider} />
+                <View style={styles.standingCell}>
+                  <Text style={styles.standingNum}>{seasonRank > 0 ? `#${seasonRank}` : '—'}</Text>
+                  <Text style={styles.standingLabel}>
+                    {seasonRank > 0 ? `of ${rankTotal} ${myBoard}s` : 'Not ranked yet'}
+                  </Text>
+                </View>
+                <View style={styles.standingDivider} />
+                <View style={styles.standingCell}>
+                  <Text style={styles.standingNum}>{user?.streakDays ?? 0}🔥</Text>
+                  <Text style={styles.standingLabel}>Day streak</Text>
+                </View>
+              </View>
+
+              <View style={styles.levelBox}>
+                <View style={styles.levelHeader}>
+                  <Text style={styles.levelTitle}>Level {level} · {levelTitle}</Text>
+                  <Text style={styles.levelXp}>{need > 0 ? `${into}/${need} XP` : ''}</Text>
+                </View>
+                <View style={styles.levelTrack}>
+                  <View style={[styles.levelFill, { width: `${levelPct}%` }]} />
+                </View>
+                <Text style={styles.levelNote}>
+                  Lifetime {user?.xpPoints ?? 0} XP · Level never resets
+                </Text>
+              </View>
+
+              {!!stats?.lastSeason && (
+                <View style={styles.lastSeason}>
+                  <Ionicons name="ribbon" size={13} color="#FDE047" />
+                  <Text style={styles.lastSeasonText}>
+                    Season {stats.lastSeason.seasonNumber}: finished #{stats.lastSeason.rank} ({stats.lastSeason.board}) with {stats.lastSeason.xp} XP
+                  </Text>
+                </View>
+              )}
+            </LinearGradient>
           </View>
 
-          <TouchableOpacity
-            activeOpacity={0.7}
-            onPress={() =>
-              Alert.alert(
-                'Seasonal Cycle Info ⏳',
-                `Season 3 ends in ${seasonCycle.daysLeft} days (${seasonCycle.endsAtDate}). Top earners receive gift cards, badges, and coaching masterclasses!`
-              )
-            }
-            style={styles.infoCircleBtn}
-          >
-            <Ionicons name="help-circle-outline" size={22} color="#64748B" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Hero Season Ticker Card */}
-        <View style={styles.heroContainer}>
-          <LinearGradient
-            colors={['#1E1B4B', '#4338CA', '#6D28D9']}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.heroGradient}
-          >
-            <View style={styles.heroTopRow}>
-              <View style={styles.cycleTimerPill}>
-                <Ionicons name="time" size={12} color="#FDE047" />
-                <Text style={styles.cycleTimerText}>
-                  {seasonCycle.daysLeft} DAYS LEFT • ENDS SEPT 15
-                </Text>
-              </View>
-
-              <View style={styles.poolPill}>
-                <Ionicons name="gift" size={11} color="#38BDF8" />
-                <Text style={styles.poolPillText}>$5K PRIZE POOL</Text>
-              </View>
-            </View>
-
-            <Text style={styles.heroTitle}>{seasonCycle.title}</Text>
-            <Text style={styles.heroSubtitle}>
-              Earn XP doing daily & weekly tasks. Top ranked users unlock real rewards!
-            </Text>
-
-            {/* Current User Standing Strip */}
-            <View style={styles.userStandingStrip}>
-              <View style={styles.standingLeft}>
-                <Ionicons name="sparkles" size={15} color="#FDE047" />
-                <Text style={styles.standingText}>
-                  Your Balance:{' '}
-                  <Text style={{ fontWeight: 'bold', color: '#FFFFFF' }}>
-                    {user?.xpPoints || 1240} XP
-                  </Text>
-                </Text>
-              </View>
-              <View style={styles.standingRankBadge}>
-                <Text style={styles.standingRankText}>
-                  Rank #4 in Vocalists
-                </Text>
-              </View>
-            </View>
-          </LinearGradient>
-        </View>
-
-        {/* Tab Navigation Segmented Bar */}
-        <View style={styles.tabBar}>
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setActiveTab('leaderboard')}
-            style={[
-              styles.tabBtn,
-              activeTab === 'leaderboard' && styles.tabBtnActive,
-            ]}
-          >
-            <Ionicons
-              name={activeTab === 'leaderboard' ? 'trophy' : 'trophy-outline'}
-              size={16}
-              color={activeTab === 'leaderboard' ? '#4F46E5' : '#64748B'}
-            />
-            <Text
-              style={[
-                styles.tabBtnText,
-                activeTab === 'leaderboard' && styles.tabBtnTextActive,
-              ]}
-            >
-              Leaderboards
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setActiveTab('quests')}
-            style={[styles.tabBtn, activeTab === 'quests' && styles.tabBtnActive]}
-          >
-            <Ionicons
-              name={activeTab === 'quests' ? 'flash' : 'flash-outline'}
-              size={16}
-              color={activeTab === 'quests' ? '#4F46E5' : '#64748B'}
-            />
-            <Text
-              style={[
-                styles.tabBtnText,
-                activeTab === 'quests' && styles.tabBtnTextActive,
-              ]}
-            >
-              XP Quests
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setActiveTab('rewards')}
-            style={[styles.tabBtn, activeTab === 'rewards' && styles.tabBtnActive]}
-          >
-            <Ionicons
-              name={activeTab === 'rewards' ? 'gift' : 'gift-outline'}
-              size={16}
-              color={activeTab === 'rewards' ? '#4F46E5' : '#64748B'}
-            />
-            <Text
-              style={[
-                styles.tabBtnText,
-                activeTab === 'rewards' && styles.tabBtnTextActive,
-              ]}
-            >
-              Rewards
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setActiveTab('rules')}
-            style={[styles.tabBtn, activeTab === 'rules' && styles.tabBtnActive]}
-          >
-            <Ionicons
-              name={activeTab === 'rules' ? 'information-circle' : 'information-circle-outline'}
-              size={16}
-              color={activeTab === 'rules' ? '#4F46E5' : '#64748B'}
-            />
-            <Text
-              style={[
-                styles.tabBtnText,
-                activeTab === 'rules' && styles.tabBtnTextActive,
-              ]}
-            >
-              Rules
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Scrollable Tab Views */}
-        <ScrollView
-          style={styles.scrollContainer}
-          contentContainerStyle={[
-            styles.scrollContent,
-            { paddingBottom: Math.max(insets.bottom + 40, 60) },
-          ]}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* TAB 1: LEADERBOARDS */}
-          {activeTab === 'leaderboard' && (
-            <View style={styles.leaderboardTab}>
-              {/* Dual Switch: Mentors vs Learners */}
-              <View style={styles.dualSwitchRow}>
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => setLeaderboardTrack('mentor')}
-                  style={[
-                    styles.switchTrackBtn,
-                    leaderboardTrack === 'mentor' && styles.switchTrackBtnActive,
-                  ]}
-                >
-                  <Ionicons
-                    name="ribbon"
-                    size={15}
-                    color={leaderboardTrack === 'mentor' ? '#FFFFFF' : '#4F46E5'}
-                  />
-                  <Text
-                    style={[
-                      styles.switchTrackText,
-                      leaderboardTrack === 'mentor' && styles.switchTrackTextActive,
-                    ]}
+          {/* Tabs (sticky) */}
+          <View style={styles.tabBarWrap}>
+            <View style={styles.tabBar}>
+              {([
+                { key: 'quests', label: 'Quests', icon: 'flash' },
+                { key: 'activity', label: 'Activity', icon: 'pulse' },
+                { key: 'rewards', label: 'Rewards', icon: 'gift' },
+                { key: 'rules', label: 'Rules', icon: 'book' },
+              ] as const).map((t) => {
+                const active = tab === t.key;
+                return (
+                  <TouchableOpacity
+                    key={t.key}
+                    activeOpacity={0.8}
+                    onPress={() => setTab(t.key)}
+                    style={[styles.tabBtn, active && styles.tabBtnActive]}
                   >
-                    Mentor Ranking
-                  </Text>
-                </TouchableOpacity>
+                    <Ionicons
+                      name={(active ? t.icon : `${t.icon}-outline`) as keyof typeof Ionicons.glyphMap}
+                      size={15}
+                      color={active ? '#4F46E5' : '#64748B'}
+                    />
+                    <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
 
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => setLeaderboardTrack('learner')}
-                  style={[
-                    styles.switchTrackBtn,
-                    leaderboardTrack === 'learner' && styles.switchTrackBtnActive,
-                  ]}
-                >
-                  <Ionicons
-                    name="trending-up"
-                    size={15}
-                    color={leaderboardTrack === 'learner' ? '#FFFFFF' : '#4F46E5'}
-                  />
-                  <Text
-                    style={[
-                      styles.switchTrackText,
-                      leaderboardTrack === 'learner' && styles.switchTrackTextActive,
-                    ]}
-                  >
-                    Learner Ranking
-                  </Text>
-                </TouchableOpacity>
-              </View>
+          <View style={styles.body}>
+            {loading && !rulebook ? (
+              <ActivityIndicator style={{ marginTop: 30 }} color="#4F46E5" />
+            ) : null}
 
-              {/* Structured Scoring Criteria Card */}
-              <View style={styles.criteriaCard}>
-                <View style={styles.criteriaHeader}>
-                  <Ionicons name="options-outline" size={13} color="#4F46E5" />
-                  <Text style={styles.criteriaHeaderTitle}>SCORING CRITERIA</Text>
-                </View>
-                <View style={styles.criteriaChipsRow}>
-                  {leaderboardTrack === 'mentor' ? (
-                    <>
-                      <View style={styles.criteriaChip}>
-                        <Ionicons name="videocam-outline" size={11} color="#4338CA" />
-                        <Text style={styles.criteriaChipText}>Critiques Delivered</Text>
-                      </View>
-                      <View style={styles.criteriaChip}>
-                        <Ionicons name="star-outline" size={11} color="#4338CA" />
-                        <Text style={styles.criteriaChipText}>Student Rating (4.8+)</Text>
-                      </View>
-                      <View style={styles.criteriaChip}>
-                        <Ionicons name="speedometer-outline" size={11} color="#4338CA" />
-                        <Text style={styles.criteriaChipText}>Fast Turnaround</Text>
-                      </View>
-                    </>
-                  ) : (
-                    <>
-                      <View style={styles.criteriaChip}>
-                        <Ionicons name="flame-outline" size={11} color="#4338CA" />
-                        <Text style={styles.criteriaChipText}>Daily Streaks</Text>
-                      </View>
-                      <View style={styles.criteriaChip}>
-                        <Ionicons name="trophy-outline" size={11} color="#4338CA" />
-                        <Text style={styles.criteriaChipText}>Challenges Completed</Text>
-                      </View>
-                      <View style={styles.criteriaChip}>
-                        <Ionicons name="trending-up-outline" size={11} color="#4338CA" />
-                        <Text style={styles.criteriaChipText}>Technique Growth</Text>
-                      </View>
-                    </>
-                  )}
-                </View>
-              </View>
-
-              {/* Olympic-Style Top 3 Visual Podium */}
-              <View style={styles.podiumContainer}>
-                {/* 2nd Place (Left) */}
-                {top2 && (
-                  <View style={styles.podiumColumn}>
-                    <View style={styles.avatarWrapperSilver}>
-                      <Image source={{ uri: top2.avatarUrl }} style={styles.podiumAvatar} />
-                      <View style={[styles.podiumRankBadge, { backgroundColor: '#94A3B8' }]}>
-                        <Text style={styles.podiumRankNum}>2</Text>
-                      </View>
-                    </View>
-                    <Text style={styles.podiumName} numberOfLines={1}>
-                      {top2.name.split(' ')[0]}
-                    </Text>
-                    <View style={styles.podiumXpPill}>
-                      <Text style={styles.podiumXpText}>{top2.xpPoints} XP</Text>
-                    </View>
-                    <View style={[styles.podiumBlock, styles.podiumBlockSilver]}>
-                      <Text style={styles.podiumMedal}>🥈</Text>
-                    </View>
+            {/* ---------------- QUESTS ---------------- */}
+            {tab === 'quests' && (
+              <>
+                <Text style={styles.sectionNote}>
+                  Your {myBoard.toLowerCase()} quests. Progress updates from your real activity; claim the XP once a
+                  quest is complete. Daily quests reset every day, weekly quests every Monday.
+                </Text>
+                {xpTasks.length === 0 ? (
+                  <View style={styles.empty}>
+                    <Ionicons name="flash-outline" size={34} color="#CBD5E1" />
+                    <Text style={styles.emptyTitle}>No quests right now</Text>
                   </View>
+                ) : (
+                  <>
+                    {dailyQuests.length > 0 && <Text style={styles.groupTitle}>Daily</Text>}
+                    {dailyQuests.map(renderQuest)}
+                    {weeklyQuests.length > 0 && <Text style={styles.groupTitle}>Weekly</Text>}
+                    {weeklyQuests.map(renderQuest)}
+                  </>
                 )}
+              </>
+            )}
 
-                {/* 1st Place (Center - Highest) */}
-                {top1 && (
-                  <View style={[styles.podiumColumn, styles.podiumCenter]}>
-                    <View style={styles.avatarWrapperGold}>
-                      <Image source={{ uri: top1.avatarUrl }} style={styles.podiumAvatarGold} />
-                      <View style={[styles.podiumRankBadge, { backgroundColor: '#F59E0B' }]}>
-                        <Text style={styles.podiumRankNum}>1</Text>
-                      </View>
-                    </View>
-                    <Text style={[styles.podiumName, { fontWeight: 'bold' }]} numberOfLines={1}>
-                      {top1.name.split(' ')[0]}
+            {/* ---------------- ACTIVITY ---------------- */}
+            {tab === 'activity' && (
+              <>
+                {history.length === 0 ? (
+                  <View style={styles.empty}>
+                    <Ionicons name="pulse-outline" size={34} color="#CBD5E1" />
+                    <Text style={styles.emptyTitle}>No XP yet</Text>
+                    <Text style={styles.emptySub}>
+                      Post, practice, comment and check in daily — every XP you earn shows up here.
                     </Text>
-                    <View style={[styles.podiumXpPill, { backgroundColor: '#FEF3C7' }]}>
-                      <Text style={[styles.podiumXpText, { color: '#B45309', fontWeight: 'bold' }]}>
-                        {top1.xpPoints} XP
-                      </Text>
-                    </View>
-                    <View style={[styles.podiumBlock, styles.podiumBlockGold]}>
-                      <Text style={styles.podiumMedal}>🥇</Text>
-                    </View>
                   </View>
+                ) : (
+                  <>
+                    {historyThisSeason.length > 0 && (
+                      <>
+                        <Text style={styles.groupTitle}>This season</Text>
+                        <View style={[styles.card, styles.listCard, shadows.soft]}>
+                          {historyThisSeason.map(renderHistoryRow)}
+                        </View>
+                      </>
+                    )}
+                    {historyEarlier.length > 0 && (
+                      <>
+                        <Text style={styles.groupTitle}>Earlier (counts toward your level)</Text>
+                        <View style={[styles.card, styles.listCard, shadows.soft]}>
+                          {historyEarlier.map(renderHistoryRow)}
+                        </View>
+                      </>
+                    )}
+                  </>
                 )}
+              </>
+            )}
 
-                {/* 3rd Place (Right) */}
-                {top3 && (
-                  <View style={styles.podiumColumn}>
-                    <View style={styles.avatarWrapperBronze}>
-                      <Image source={{ uri: top3.avatarUrl }} style={styles.podiumAvatar} />
-                      <View style={[styles.podiumRankBadge, { backgroundColor: '#D97706' }]}>
-                        <Text style={styles.podiumRankNum}>3</Text>
-                      </View>
+            {/* ---------------- REWARDS ---------------- */}
+            {tab === 'rewards' && (
+              <>
+                {seasonRewards.length === 0 ? (
+                  <View style={styles.empty}>
+                    <View style={styles.emptyIconCircle}>
+                      <Ionicons name="gift-outline" size={30} color="#7C3AED" />
                     </View>
-                    <Text style={styles.podiumName} numberOfLines={1}>
-                      {top3.name.split(' ')[0]}
+                    <Text style={styles.emptyTitle}>No rewards announced yet</Text>
+                    <Text style={styles.emptySub}>
+                      Rewards for this season will appear here as soon as they’re announced. Keep earning XP —
+                      final ranks lock when the season resets{resetAt ? ` on ${formatLocal(resetAt)}` : ''}.
                     </Text>
-                    <View style={styles.podiumXpPill}>
-                      <Text style={styles.podiumXpText}>{top3.xpPoints} XP</Text>
-                    </View>
-                    <View style={[styles.podiumBlock, styles.podiumBlockBronze]}>
-                      <Text style={styles.podiumMedal}>🥉</Text>
-                    </View>
                   </View>
-                )}
-              </View>
-
-              {/* Ranks 4 to 10 List */}
-              <View style={styles.rankListContainer}>
-                <Text style={styles.rankListTitle}>Ranks #4 - #10</Text>
-
-                {restList.map((entry) => {
-                  const isMe = entry.isCurrentUser;
-                  return (
-                    <View
-                      key={entry.id}
-                      style={[
-                        styles.rankRowCard,
-                        isMe && styles.myRankHighlightCard,
-                        shadows.soft,
-                      ]}
-                    >
-                      <View style={styles.rankNumberBox}>
-                        <Text style={[styles.rankNumberText, isMe && { color: '#4F46E5', fontWeight: 'bold' }]}>
-                          #{entry.rank}
-                        </Text>
-                      </View>
-
-                      <Image source={{ uri: entry.avatarUrl }} style={styles.rowAvatar} />
-
-                      <View style={styles.rowInfoBlock}>
-                        <View style={styles.rowNameTitleLine}>
-                          <Text style={[styles.rowNameText, isMe && { color: '#4F46E5' }]} numberOfLines={1}>
-                            {entry.name}
-                          </Text>
-                          {isMe && (
-                            <View style={styles.youBadge}>
-                              <Text style={styles.youBadgeText}>YOU</Text>
+                ) : (
+                  <>
+                    <Text style={styles.sectionNote}>
+                      Rewards are earned from your final rank when a season ends, and can be claimed once per
+                      season.
+                    </Text>
+                    {seasonRewards.map((reward) => {
+                      const status = reward.claimed
+                        ? { text: 'Claimed', color: '#16A34A', bg: '#DCFCE7', icon: 'checkmark-circle' as const }
+                        : reward.eligible
+                        ? { text: 'Ready to claim', color: '#FFFFFF', bg: '#16A34A', icon: 'gift' as const }
+                        : reward.onTrack
+                        ? { text: 'On track this season', color: '#4F46E5', bg: '#EEF2FF', icon: 'trending-up' as const }
+                        : { text: `Finish in ${reward.minRankRequired}`, color: '#64748B', bg: '#F1F5F9', icon: 'lock-closed' as const };
+                      return (
+                        <TouchableOpacity
+                          key={reward.id}
+                          activeOpacity={0.9}
+                          onPress={() => openRewardClaimModal(reward)}
+                          style={[styles.rewardCard, shadows.soft]}
+                        >
+                          <LinearGradient colors={reward.gradientColors} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.rewardHead}>
+                            <View style={styles.rewardIcon}>
+                              <Ionicons name={reward.icon as keyof typeof Ionicons.glyphMap} size={20} color="#FFFFFF" />
                             </View>
-                          )}
-                        </View>
-
-                        <Text style={styles.rowMetricSub}>
-                          {entry.keyMetricValue}
-                        </Text>
-                      </View>
-
-                      <View style={styles.rowXpBox}>
-                        <Text style={styles.rowXpValue}>{entry.xpPoints}</Text>
-                        <Text style={styles.rowXpLabel}>XP</Text>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-          )}
-
-          {/* TAB 2: XP QUESTS & JOBS */}
-          {activeTab === 'quests' && (
-            <View style={styles.questsTab}>
-              <View style={styles.questRoleToggle}>
-                <Text style={styles.questRoleLabel}>Show Tasks For:</Text>
-                <View style={styles.questRoleButtons}>
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    onPress={() => setQuestRoleFilter('Learner')}
-                    style={[
-                      styles.questFilterBtn,
-                      questRoleFilter === 'Learner' && styles.questFilterBtnActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.questFilterText,
-                        questRoleFilter === 'Learner' && styles.questFilterTextActive,
-                      ]}
-                    >
-                      Learner Tasks
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    onPress={() => setQuestRoleFilter('Mentor')}
-                    style={[
-                      styles.questFilterBtn,
-                      questRoleFilter === 'Mentor' && styles.questFilterBtnActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.questFilterText,
-                        questRoleFilter === 'Mentor' && styles.questFilterTextActive,
-                      ]}
-                    >
-                      Mentor Tasks
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <Text style={styles.questsNotice}>
-                Complete these daily practice drills and community contributions to accumulate XP and climb the seasonal rankings.
-              </Text>
-
-              {/* Quest Items */}
-              <View style={styles.questsList}>
-                {filteredTasks.map((task) => (
-                  <View key={task.id} style={[styles.taskCard, shadows.soft]}>
-                    <View style={styles.taskCardTop}>
-                      <View style={[styles.taskIconBox, { backgroundColor: task.iconBg }]}>
-                        <Ionicons
-                          name={task.icon as keyof typeof Ionicons.glyphMap}
-                          size={20}
-                          color={task.iconColor}
-                        />
-                      </View>
-
-                      <View style={styles.taskTitleCol}>
-                        <View style={styles.taskHeaderRow}>
-                          <Text style={styles.taskTitle}>{task.title}</Text>
-                          <View style={styles.categoryBadge}>
-                            <Text style={styles.categoryBadgeText}>
-                              {task.category.toUpperCase()}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={styles.taskDesc}>{task.description}</Text>
-                      </View>
-
-                      <View style={styles.xpRewardPill}>
-                        <Text style={styles.xpRewardText}>+{task.xpReward} XP</Text>
-                      </View>
-                    </View>
-
-                    {/* Bottom Action / Progress Row */}
-                    <View style={styles.taskBottomRow}>
-                      {task.progress && (
-                        <View style={styles.progressCounter}>
-                          <Ionicons name="calendar-outline" size={13} color="#64748B" />
-                          <Text style={styles.progressCounterText}>
-                            {task.progress.current} / {task.progress.total} {task.progress.unit}
-                          </Text>
-                        </View>
-                      )}
-
-                      {task.completed ? (
-                        <View style={styles.completedBadge}>
-                          <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-                          <Text style={styles.completedBadgeText}>Completed</Text>
-                        </View>
-                      ) : task.claimable ? (
-                        <TouchableOpacity
-                          activeOpacity={0.85}
-                          onPress={() => handleClaimXP(task.id)}
-                          style={styles.claimXpBtn}
-                        >
-                          <LinearGradient
-                            colors={['#4F46E5', '#7C3AED']}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 0 }}
-                            style={styles.claimXpGradient}
-                          >
-                            <Ionicons name="flash" size={13} color="#FFFFFF" />
-                            <Text style={styles.claimXpBtnText}>Claim +{task.xpReward} XP</Text>
+                            <View style={styles.flex1}>
+                              <Text style={styles.rewardTitle}>{reward.title}</Text>
+                              <Text style={styles.rewardSub}>{reward.subtitle}</Text>
+                            </View>
+                            <View style={styles.rewardTag}>
+                              <Text style={styles.rewardTagText}>{reward.tag}</Text>
+                            </View>
                           </LinearGradient>
+                          <View style={styles.rewardBody}>
+                            <Text style={styles.rewardDesc} numberOfLines={2}>{reward.description}</Text>
+                            <View style={[styles.statusChip, { backgroundColor: status.bg }]}>
+                              <Ionicons name={status.icon} size={12} color={status.color} />
+                              <Text style={[styles.statusText, { color: status.color }]}>{status.text}</Text>
+                            </View>
+                          </View>
                         </TouchableOpacity>
-                      ) : (
-                        <TouchableOpacity
-                          activeOpacity={0.7}
-                          onPress={() =>
-                            Alert.alert(
-                              task.title,
-                              `Keep practicing to fulfill: ${task.description}`
-                            )
-                          }
-                          style={styles.inProgressBtn}
-                        >
-                          <Text style={styles.inProgressBtnText}>In Progress</Text>
-                        </TouchableOpacity>
-                      )}
+                      );
+                    })}
+                  </>
+                )}
+              </>
+            )}
+
+            {/* ---------------- RULES ---------------- */}
+            {tab === 'rules' && rulebook && (
+              <>
+                <View style={[styles.card, shadows.soft]}>
+                  <View style={styles.cardHeader}>
+                    <View style={[styles.cardHeaderIcon, { backgroundColor: '#FEF3C7' }]}>
+                      <Ionicons name="calendar-outline" size={17} color="#D97706" />
+                    </View>
+                    <View style={styles.flex1}>
+                      <Text style={styles.cardTitle}>How seasons work</Text>
+                      <Text style={styles.cardSub}>
+                        This season resets {formatLocal(rulebook.season.endsAt)} (your time)
+                      </Text>
                     </View>
                   </View>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* TAB 3: 6 SEASONAL REWARDS (From Image) */}
-          {activeTab === 'rewards' && (
-            <View style={styles.rewardsTab}>
-              <View style={styles.rewardsIntroBox}>
-                <Text style={styles.rewardsIntroTitle}>
-                  Seasonal Rewards Pool
-                </Text>
-                <Text style={styles.rewardsIntroSub}>
-                  At the end of each monthly/seasonal cycle, top-ranked users on both Mentor and Learner leaderboards receive these tiered rewards:
-                </Text>
-              </View>
-
-              {/* The 6 Reward Cards */}
-              <View style={styles.rewardsGrid}>
-                {seasonRewards.map((reward) => (
-                  <TouchableOpacity
-                    key={reward.id}
-                    activeOpacity={0.9}
-                    onPress={() => openRewardClaimModal(reward)}
-                    style={[styles.rewardCard, shadows.soft]}
-                  >
-                    <LinearGradient
-                      colors={reward.gradientColors}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                      style={styles.rewardCardTopGradient}
-                    >
-                      <View style={styles.rewardCardHeaderRow}>
-                        <View style={styles.rewardIconBadge}>
-                          <Ionicons
-                            name={reward.icon as keyof typeof Ionicons.glyphMap}
-                            size={20}
-                            color="#FFFFFF"
-                          />
-                        </View>
-                        <View style={styles.rewardRankTargetPill}>
-                          <Text style={styles.rewardRankTargetText}>
-                            {reward.tag}
-                          </Text>
-                        </View>
-                      </View>
-                      <Text style={styles.rewardCardTitle}>{reward.title}</Text>
-                      <Text style={styles.rewardCardSub}>{reward.subtitle}</Text>
-                    </LinearGradient>
-
-                    <View style={styles.rewardCardBody}>
-                      <Text style={styles.rewardCardDesc} numberOfLines={2}>
-                        {reward.description}
-                      </Text>
-
-                      <View style={styles.perksQuickList}>
-                        {reward.perks.slice(0, 2).map((p, idx) => (
-                          <View key={idx} style={styles.quickPerkRow}>
-                            <Ionicons name="checkmark-circle" size={13} color="#10B981" />
-                            <Text style={styles.quickPerkText} numberOfLines={1}>
-                              {p}
-                            </Text>
-                          </View>
-                        ))}
-                      </View>
-
-                      <View style={styles.claimPreviewBtnRow}>
-                        <Text style={styles.tapToPreviewLabel}>
-                          Tap to view details & demo voucher
-                        </Text>
-                        <Ionicons name="arrow-forward-circle" size={18} color="#4F46E5" />
-                      </View>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* TAB 4: RULES & CYCLE EXPLANATION */}
-          {activeTab === 'rules' && (
-            <View style={styles.rulesTab}>
-              <View style={[styles.rulesCard, shadows.soft]}>
-                <View style={styles.rulesTitleRow}>
-                  <Ionicons name="ribbon" size={20} color="#4F46E5" />
-                  <Text style={styles.rulesTitle}>How Rankings & Rewards Work</Text>
+                  <Bullets items={rulebook.seasonRules} color="#D97706" />
                 </View>
 
-                <Text style={styles.rulesSectionHeader}>🏆 1. Mentor Ranking Logic</Text>
-                <Text style={styles.rulesBody}>
-                  Mentors earn Mentorship XP by providing thoughtful video critiques, maintaining high student satisfaction (4.8+ rating), and answering requests within 2 hours. Top mentors receive the Wall of Fame Spotlight, paid masterclass deals, and platform tokens.
-                </Text>
+                {/* Role switcher */}
+                <View style={styles.roleSwitch}>
+                  {(['Learner', 'Mentor'] as const).map((r) => (
+                    <TouchableOpacity
+                      key={r}
+                      activeOpacity={0.85}
+                      onPress={() => setRulesFor(r)}
+                      style={[styles.roleBtn, rulesFor === r && styles.roleBtnActive]}
+                    >
+                      <Ionicons
+                        name={r === 'Mentor' ? 'ribbon' : 'school'}
+                        size={14}
+                        color={rulesFor === r ? '#FFFFFF' : '#475569'}
+                      />
+                      <Text style={[styles.roleBtnText, rulesFor === r && styles.roleBtnTextActive]}>
+                        {r} rules{r === myBoard ? ' (you)' : ''}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
 
-                <Text style={styles.rulesSectionHeader}>📈 2. Learner Ranking Logic</Text>
-                <Text style={styles.rulesBody}>
-                  Learners earn Learner XP through consistent daily practice, weekly streak milestones, completing circle challenges, and raising their technique benchmark score. Top learners earn $25 - $100 gift coupons and free 1-on-1 Berklee masterclass passes.
-                </Text>
+                <View style={[styles.card, shadows.soft]}>
+                  <Text style={styles.cardTitle}>How {rulesFor}s earn XP</Text>
+                  <Text style={styles.cardSub}>
+                    {rulesFor}s are ranked only against other {rulesFor.toLowerCase()}s.
+                  </Text>
+                  {rulesForBoard.map(([category, rules]) => (
+                    <View key={category} style={styles.ruleGroup}>
+                      <View style={styles.ruleGroupHeader}>
+                        <Ionicons name={CATEGORY_ICON[category] ?? 'sparkles-outline'} size={14} color="#4F46E5" />
+                        <Text style={styles.ruleGroupTitle}>{category}</Text>
+                      </View>
+                      {rules.map(renderRule)}
+                    </View>
+                  ))}
+                </View>
 
-                <Text style={styles.rulesSectionHeader}>⏳ 3. Monthly / Seasonal Cycle Reset</Text>
-                <Text style={styles.rulesBody}>
-                  Each cycle lasts 30 days. At midnight on the final day, the leaderboard locks, rewards are distributed to top earners’ wallets/emails, and a new season begins with refreshed prizes and fresh quests.
-                </Text>
+                {questsForBoard.length > 0 && (
+                  <View style={[styles.card, shadows.soft]}>
+                    <Text style={styles.cardTitle}>{rulesFor} quests (bonus XP)</Text>
+                    {questsForBoard.map((q) => (
+                      <View key={q.id} style={styles.ruleRow}>
+                        <View style={styles.flex1}>
+                          <Text style={styles.ruleTitle}>{q.title}</Text>
+                          <Text style={styles.ruleDesc}>{q.description}</Text>
+                          <Text style={styles.ruleCap}>{q.category === 'daily' ? 'Resets daily' : 'Resets weekly'}</Text>
+                        </View>
+                        <Text style={styles.ruleXp}>+{q.xpReward}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
 
-                <Text style={styles.rulesSectionHeader}>⭐ 4. Fair Play & Verification</Text>
-                <Text style={styles.rulesBody}>
-                  All video submissions and critique ratings are verified by the community to ensure genuine learning and encouragement.
-                </Text>
-              </View>
-            </View>
-          )}
+                <View style={[styles.card, shadows.soft]}>
+                  <Text style={styles.cardTitle}>Levels</Text>
+                  <Text style={styles.cardSub}>Based on lifetime XP — your level never goes down.</Text>
+                  {rulebook.levels.map((l) => (
+                    <View key={l.title} style={styles.levelRow}>
+                      <Text style={[styles.levelRowTitle, levelTitle === l.title && { color: '#4F46E5' }]}>
+                        {l.title}
+                        {levelTitle === l.title ? '  • you' : ''}
+                      </Text>
+                      <Text style={styles.levelRowMeta}>
+                        Lv {l.minLevel}+ · {l.minXp.toLocaleString()} XP
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+
+                <View style={[styles.card, shadows.soft]}>
+                  <View style={styles.cardHeader}>
+                    <View style={[styles.cardHeaderIcon, { backgroundColor: '#E0F2FE' }]}>
+                      <Ionicons name="shield-checkmark-outline" size={17} color="#0284C7" />
+                    </View>
+                    <Text style={[styles.cardTitle, styles.flex1]}>Fair play</Text>
+                  </View>
+                  <Bullets items={rulebook.fairPlay} color="#0284C7" />
+                </View>
+              </>
+            )}
+          </View>
         </ScrollView>
 
-        {/* Celebratory Claim Modal */}
         <RewardClaimModal
           visible={!!activeRewardClaimModal}
           reward={activeRewardClaimModal}
@@ -720,763 +621,187 @@ export const RewardsHubModal: React.FC<RewardsHubModalProps> = ({
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-  },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  flex1: { flex: 1 },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.base,
-    paddingVertical: spacing.sm,
+    paddingBottom: spacing.sm,
+  },
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  backCircleBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  topBarTitleBox: {
-    alignItems: 'center',
-  },
-  topBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  topBarSub: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#D97706',
-    letterSpacing: 0.5,
-  },
-  topBarTitle: {
-    fontSize: 15,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-  },
-  infoCircleBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroContainer: {
-    marginHorizontal: spacing.base,
-    marginTop: spacing.sm,
-    marginBottom: spacing.xs,
-    borderRadius: borderRadius.xl,
-    overflow: 'hidden',
-  },
-  heroGradient: {
-    padding: spacing.md,
-    borderRadius: borderRadius.xl,
-  },
-  heroTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  cycleTimerPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.16)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: borderRadius.full,
-  },
-  cycleTimerText: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#FDE047',
-    letterSpacing: 0.4,
-  },
-  poolPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: borderRadius.full,
-  },
-  poolPillText: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  heroTitle: {
-    fontSize: 18,
-    fontWeight: typography.weights.bold,
-    color: '#FFFFFF',
-    marginBottom: 2,
-  },
-  heroSubtitle: {
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.85)',
-    marginBottom: 10,
-    lineHeight: 16,
-  },
-  userStandingStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: borderRadius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  standingLeft: {
+  iconBtnGhost: { width: 38 },
+  topTitleBox: { alignItems: 'center' },
+  topKicker: { fontSize: 10, fontWeight: '800', color: '#D97706', letterSpacing: 1 },
+  topTitle: { fontSize: 17, fontWeight: typography.weights.bold, color: '#0F172A' },
+
+  heroWrap: { paddingHorizontal: spacing.base },
+  hero: { borderRadius: borderRadius.xxl, padding: spacing.base, gap: 8 },
+  heroTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  timerPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-  },
-  standingText: {
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.9)',
-  },
-  standingRankBadge: {
-    backgroundColor: '#FDE047',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
     borderRadius: borderRadius.full,
   },
-  standingRankText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#1E1B4B',
-  },
-  tabBar: {
+  timerText: { fontSize: 10, fontWeight: '800', color: '#FDE047', letterSpacing: 0.5 },
+  resetText: { fontSize: 10, color: 'rgba(255,255,255,0.75)', fontWeight: '600' },
+  heroTitle: { fontSize: 19, fontWeight: typography.weights.bold, color: '#FFFFFF', marginTop: 4 },
+  heroSub: { fontSize: 12, color: 'rgba(255,255,255,0.8)', lineHeight: 17 },
+  standingRow: {
     flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-    paddingHorizontal: spacing.sm,
-    marginTop: 6,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: borderRadius.lg,
+    paddingVertical: 10,
+    marginTop: 4,
   },
+  standingCell: { flex: 1, alignItems: 'center' },
+  standingNum: { fontSize: 17, fontWeight: '800', color: '#FFFFFF' },
+  standingLabel: { fontSize: 10, color: 'rgba(255,255,255,0.75)', marginTop: 1 },
+  standingDivider: { width: 1, height: 26, backgroundColor: 'rgba(255,255,255,0.2)' },
+  levelBox: { backgroundColor: 'rgba(15,23,42,0.25)', borderRadius: borderRadius.lg, padding: 10, gap: 6 },
+  levelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  levelTitle: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  levelXp: { fontSize: 11, fontWeight: '700', color: '#C7D2FE' },
+  levelTrack: { height: 7, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.2)', overflow: 'hidden' },
+  levelFill: { height: '100%', borderRadius: 4, backgroundColor: '#FDE047' },
+  levelNote: { fontSize: 10, color: 'rgba(255,255,255,0.7)' },
+  lastSeason: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  lastSeasonText: { fontSize: 11, color: '#FEF9C3', fontWeight: '600', flex: 1 },
+
+  tabBarWrap: { backgroundColor: '#F8FAFC', paddingHorizontal: spacing.base, paddingVertical: spacing.sm },
+  tabBar: { flexDirection: 'row', backgroundColor: '#E2E8F0', borderRadius: borderRadius.lg, padding: 3 },
   tabBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    borderRadius: borderRadius.md,
+  },
+  tabBtnActive: { backgroundColor: '#FFFFFF' },
+  tabText: { fontSize: 11, fontWeight: '600', color: '#64748B' },
+  tabTextActive: { color: '#4F46E5', fontWeight: '800' },
+
+  body: { paddingHorizontal: spacing.base, gap: 10 },
+  sectionNote: { fontSize: 12, color: '#64748B', lineHeight: 17 },
+  groupTitle: { fontSize: 12, fontWeight: '800', color: '#334155', marginTop: 6, textTransform: 'uppercase', letterSpacing: 0.5 },
+
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: spacing.md,
+    gap: 8,
+  },
+  listCard: { paddingVertical: 4, gap: 0 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  cardHeaderIcon: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  cardTitle: { fontSize: 14, fontWeight: typography.weights.bold, color: '#0F172A' },
+  cardSub: { fontSize: 11, color: '#64748B', marginTop: 1 },
+
+  questTop: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+  questIcon: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  questTitle: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  questDesc: { fontSize: 11, color: '#64748B', lineHeight: 16, marginTop: 1 },
+  xpPill: { backgroundColor: '#EEF2FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: borderRadius.full },
+  xpPillText: { fontSize: 11, fontWeight: '800', color: '#4F46E5' },
+  progressBlock: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  progressTrack: { flex: 1, height: 6, borderRadius: 3, backgroundColor: '#F1F5F9', overflow: 'hidden' },
+  progressFill: { height: '100%', borderRadius: 3, backgroundColor: '#7C3AED' },
+  progressText: { fontSize: 11, color: '#64748B', fontWeight: '600' },
+  questBottom: { flexDirection: 'row', justifyContent: 'flex-end' },
+  doneBadge: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  doneText: { fontSize: 12, fontWeight: '700', color: '#16A34A' },
+  claimBtn: { borderRadius: borderRadius.full, overflow: 'hidden' },
+  claimGradient: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 7, minWidth: 110, justifyContent: 'center' },
+  claimText: { fontSize: 12, fontWeight: '800', color: '#FFFFFF' },
+  inProgress: { fontSize: 12, fontWeight: '600', color: '#94A3B8' },
+
+  historyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  historyIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  historyLabel: { fontSize: 13, fontWeight: '600', color: '#0F172A' },
+  historyTime: { fontSize: 11, color: '#94A3B8', marginTop: 1 },
+  historyAmount: { fontSize: 13, fontWeight: '800', color: '#16A34A' },
+
+  empty: { alignItems: 'center', paddingVertical: 36, paddingHorizontal: 20, gap: 8 },
+  emptyIconCircle: { width: 62, height: 62, borderRadius: 31, backgroundColor: '#F3E8FF', alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { fontSize: 15, fontWeight: typography.weights.bold, color: '#334155' },
+  emptySub: { fontSize: 12, color: '#94A3B8', textAlign: 'center', lineHeight: 18 },
+
+  rewardCard: { backgroundColor: '#FFFFFF', borderRadius: borderRadius.xl, borderWidth: 1, borderColor: '#E2E8F0', overflow: 'hidden' },
+  rewardHead: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: spacing.md },
+  rewardIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.22)', alignItems: 'center', justifyContent: 'center' },
+  rewardTitle: { fontSize: 14, fontWeight: '800', color: '#FFFFFF' },
+  rewardSub: { fontSize: 11, color: 'rgba(255,255,255,0.85)' },
+  rewardTag: { backgroundColor: 'rgba(255,255,255,0.22)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: borderRadius.full },
+  rewardTagText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF' },
+  rewardBody: { padding: spacing.md, gap: 8 },
+  rewardDesc: { fontSize: 12, color: '#475569', lineHeight: 17 },
+  statusChip: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 4, borderRadius: borderRadius.full },
+  statusText: { fontSize: 11, fontWeight: '800' },
+
+  roleSwitch: { flexDirection: 'row', gap: 8 },
+  roleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
     paddingVertical: 10,
-    gap: 5,
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
+    borderRadius: borderRadius.lg,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  tabBtnActive: {
-    borderBottomColor: '#4F46E5',
-  },
-  tabBtnText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  tabBtnTextActive: {
-    color: '#4F46E5',
-    fontWeight: 'bold',
-  },
-  scrollContainer: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: spacing.base,
-    paddingTop: spacing.sm,
-  },
-  leaderboardTab: {
-    gap: spacing.sm,
-  },
-  dualSwitchRow: {
-    flexDirection: 'row',
-    backgroundColor: '#EEF2FF',
-    borderRadius: borderRadius.xl,
-    padding: 4,
-    gap: 4,
-  },
-  switchTrackBtn: {
-    flex: 1,
+  roleBtnActive: { backgroundColor: '#4F46E5', borderColor: '#4F46E5' },
+  roleBtnText: { fontSize: 12, fontWeight: '700', color: '#475569' },
+  roleBtnTextActive: { color: '#FFFFFF' },
+  ruleGroup: { marginTop: 4 },
+  ruleGroupHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  ruleGroupTitle: { fontSize: 11, fontWeight: '800', color: '#4F46E5', textTransform: 'uppercase', letterSpacing: 0.5 },
+  ruleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 10,
     paddingVertical: 9,
-    borderRadius: borderRadius.lg,
-    gap: 6,
-  },
-  switchTrackBtnActive: {
-    backgroundColor: '#4F46E5',
-    shadowColor: '#4F46E5',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  switchTrackText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#4F46E5',
-  },
-  switchTrackTextActive: {
-    color: '#FFFFFF',
-  },
-  criteriaCard: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: borderRadius.lg,
-    padding: 8,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 6,
-  },
-  criteriaHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 2,
-  },
-  criteriaHeaderTitle: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#4F46E5',
-    letterSpacing: 0.5,
-  },
-  criteriaChipsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 4,
-  },
-  criteriaChip: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#EEF2FF',
-    paddingVertical: 5,
-    paddingHorizontal: 4,
-    borderRadius: borderRadius.sm,
-    gap: 4,
-  },
-  criteriaChipText: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: '#3730A3',
-    textAlign: 'center',
-  },
-  podiumContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    marginTop: spacing.md,
-    marginBottom: spacing.base,
-    gap: 12,
-  },
-  podiumColumn: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  podiumCenter: {
-    marginTop: -16,
-  },
-  crownEmoji: {
-    fontSize: 20,
-    marginBottom: 2,
-  },
-  avatarWrapperGold: {
-    position: 'relative',
-    borderWidth: 3,
-    borderColor: '#F59E0B',
-    borderRadius: 36,
-    padding: 2,
-  },
-  podiumAvatarGold: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-  },
-  avatarWrapperSilver: {
-    position: 'relative',
-    borderWidth: 2.5,
-    borderColor: '#94A3B8',
-    borderRadius: 30,
-    padding: 2,
-  },
-  avatarWrapperBronze: {
-    position: 'relative',
-    borderWidth: 2.5,
-    borderColor: '#D97706',
-    borderRadius: 30,
-    padding: 2,
-  },
-  podiumAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-  },
-  podiumRankBadge: {
-    position: 'absolute',
-    bottom: -4,
-    alignSelf: 'center',
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#FFFFFF',
-  },
-  podiumRankNum: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  podiumName: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#0F172A',
-    marginTop: 6,
-  },
-  podiumXpPill: {
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-    marginTop: 2,
-    marginBottom: 6,
-  },
-  podiumXpText: {
-    fontSize: 10,
-    color: '#475569',
-    fontWeight: '600',
-  },
-  podiumBlock: {
-    width: '100%',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderTopLeftRadius: borderRadius.lg,
-    borderTopRightRadius: borderRadius.lg,
-  },
-  podiumBlockGold: {
-    height: 80,
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  podiumBlockSilver: {
-    height: 60,
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  podiumBlockBronze: {
-    height: 48,
-    backgroundColor: '#FFEDD5',
-    borderWidth: 1,
-    borderColor: '#FED7AA',
-  },
-  podiumMedal: {
-    fontSize: 22,
-  },
-  rankListContainer: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: borderRadius.xl,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 8,
-  },
-  rankListTitle: {
-    fontSize: 13,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-    marginBottom: 4,
-  },
-  rankRowCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 9,
-    paddingHorizontal: 10,
-    backgroundColor: '#F8FAFC',
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-    gap: 10,
-  },
-  myRankHighlightCard: {
-    backgroundColor: '#EEF2FF',
-    borderColor: '#C7D2FE',
-    borderWidth: 1.5,
-  },
-  rankNumberBox: {
-    width: 26,
-    alignItems: 'center',
-  },
-  rankNumberText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#64748B',
-  },
-  rowAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-  },
-  rowInfoBlock: {
-    flex: 1,
-  },
-  rowNameTitleLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  rowNameText: {
-    fontSize: 12,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-  },
-  youBadge: {
-    backgroundColor: '#4F46E5',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  youBadgeText: {
-    fontSize: 8,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  rowMetricSub: {
-    fontSize: 10,
-    color: '#64748B',
-    marginTop: 1,
-  },
-  rowXpBox: {
-    alignItems: 'flex-end',
-  },
-  rowXpValue: {
-    fontSize: 13,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-  },
-  rowXpLabel: {
-    fontSize: 9,
-    color: '#64748B',
-    fontWeight: '600',
-  },
-  questsTab: {
-    gap: spacing.sm,
-  },
-  questRoleToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
-    padding: 10,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  questRoleLabel: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#0F172A',
-  },
-  questRoleButtons: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  questFilterBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: borderRadius.full,
-    backgroundColor: '#F1F5F9',
-  },
-  questFilterBtnActive: {
-    backgroundColor: '#4F46E5',
-  },
-  questFilterText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  questFilterTextActive: {
-    color: '#FFFFFF',
-  },
-  questsNotice: {
-    fontSize: 11,
-    color: '#64748B',
-    lineHeight: 16,
-    paddingHorizontal: 2,
-  },
-  questsList: {
-    gap: 10,
-  },
-  taskCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: borderRadius.xl,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 10,
-  },
-  taskCardTop: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  taskIconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  taskTitleCol: {
-    flex: 1,
-  },
-  taskHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flexWrap: 'wrap',
-  },
-  taskTitle: {
-    fontSize: 13,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-  },
-  categoryBadge: {
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  categoryBadgeText: {
-    fontSize: 8,
-    fontWeight: 'bold',
-    color: '#64748B',
-  },
-  taskDesc: {
-    fontSize: 11,
-    color: '#64748B',
-    marginTop: 2,
-    lineHeight: 15,
-  },
-  xpRewardPill: {
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: borderRadius.full,
-  },
-  xpRewardText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#4F46E5',
-  },
-  taskBottomRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F8FAFC',
-  },
-  progressCounter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  progressCounterText: {
-    fontSize: 11,
-    color: '#64748B',
-    fontWeight: '600',
-  },
-  completedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#DCFCE7',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: borderRadius.full,
-  },
-  completedBadgeText: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: '#15803D',
-  },
-  claimXpBtn: {
-    borderRadius: borderRadius.full,
-    overflow: 'hidden',
-  },
-  claimXpGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  claimXpBtnText: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  inProgressBtn: {
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: borderRadius.full,
-  },
-  inProgressBtnText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#64748B',
-  },
-  rewardsTab: {
-    gap: spacing.sm,
-  },
-  rewardsIntroBox: {
-    backgroundColor: '#FFFFFF',
-    padding: spacing.md,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 4,
-  },
-  rewardsIntroTitle: {
-    fontSize: 14,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-    marginBottom: 3,
-  },
-  rewardsIntroSub: {
-    fontSize: 11,
-    color: '#64748B',
-    lineHeight: 16,
-  },
-  rewardsGrid: {
-    gap: 12,
-  },
-  rewardCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: borderRadius.xl,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  rewardCardTopGradient: {
-    padding: spacing.md,
-  },
-  rewardCardHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  rewardIconBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255, 255, 255, 0.22)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rewardRankTargetPill: {
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: borderRadius.full,
-  },
-  rewardRankTargetText: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  rewardCardTitle: {
-    fontSize: 15,
-    fontWeight: typography.weights.bold,
-    color: '#FFFFFF',
-  },
-  rewardCardSub: {
-    fontSize: 11,
-    color: 'rgba(255, 255, 255, 0.9)',
-    marginTop: 2,
-  },
-  rewardCardBody: {
-    padding: spacing.md,
-    gap: 8,
-  },
-  rewardCardDesc: {
-    fontSize: 12,
-    color: '#475569',
-    lineHeight: 17,
-  },
-  perksQuickList: {
-    gap: 4,
-  },
-  quickPerkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  quickPerkText: {
-    fontSize: 11,
-    color: '#334155',
-  },
-  claimPreviewBtnRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-    marginTop: 2,
-  },
-  tapToPreviewLabel: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: '#4F46E5',
-  },
-  rulesTab: {
-    gap: spacing.sm,
-  },
-  rulesCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: borderRadius.xl,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 8,
-  },
-  rulesTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  rulesTitle: {
-    fontSize: 15,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-  },
-  rulesSectionHeader: {
-    fontSize: 12,
-    fontWeight: typography.weights.bold,
-    color: '#1E1B4B',
-    marginTop: 6,
-  },
-  rulesBody: {
-    fontSize: 12,
-    color: '#475569',
-    lineHeight: 18,
-  },
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  ruleTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  ruleTitle: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  ruleDesc: { fontSize: 11, color: '#64748B', lineHeight: 16, marginTop: 1 },
+  ruleCap: { fontSize: 10, color: '#94A3B8', fontWeight: '600', marginTop: 2 },
+  ruleXp: { fontSize: 15, fontWeight: '800', color: '#16A34A' },
+  coreChip: { flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#F1F5F9', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 },
+  coreChipText: { fontSize: 9, fontWeight: '800', color: '#475569' },
+  levelRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  levelRowTitle: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  levelRowMeta: { fontSize: 12, color: '#64748B' },
+  bullets: { gap: 7 },
+  bulletRow: { flexDirection: 'row', gap: 7, alignItems: 'flex-start' },
+  bulletText: { flex: 1, fontSize: 12, color: '#334155', lineHeight: 17 },
 });

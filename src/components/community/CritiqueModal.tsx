@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,12 +11,18 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Share,
+  ActivityIndicator,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { CommunityPost } from '../../types';
 import { useApp } from '../../context/AppContext';
+import { getSocket } from '../../realtime/socket';
 import { Avatar } from '../common/Avatar';
+import { MusicAnimation } from '../common/NowPlayingBar';
+import { PhotoCarousel } from '../common/PhotoCarousel';
 import { colors, typography, spacing, borderRadius } from '../../theme';
 
 interface CritiqueModalProps {
@@ -28,11 +34,42 @@ interface CritiqueModalProps {
 
 export const CritiqueModal: React.FC<CritiqueModalProps> = ({
   visible,
-  post,
+  post: postProp,
   onClose,
   initialTab = 'mentor',
 }) => {
-  const { selectedRole, setRole, addCommentToPost, toggleLikeComment, openUserProfile } = useApp();
+  const {
+    selectedRole,
+    posts,
+    reels,
+    addCommentToPost,
+    toggleLikeComment,
+    toggleLikePost,
+    toggleSavePost,
+    pressRepost,
+    openUserProfile,
+    playAudioPost,
+    audioPost,
+    isAudioPlaying,
+    recordPostView,
+    user,
+    deleteComment,
+    showDialog,
+  } = useApp();
+
+  // Always render the freshest copy of this post from the feeds, so new comments,
+  // likes and deletes appear instantly (the prop is only a point-in-time snapshot).
+  const post = React.useMemo(() => {
+    if (!postProp) return null;
+    return (
+      posts.find((p) => p.id === postProp.id) ??
+      reels.find((p) => p.id === postProp.id) ??
+      postProp
+    );
+  }, [postProp, posts, reels]);
+
+  const videoUrl = post?.videoUrl ?? null;
+
   const [commentTypeTab, setCommentTypeTab] = useState<'all' | 'mentor' | 'general'>('all');
   const [composeType, setComposeType] = useState<'general' | 'mentor'>('general');
   const [commentText, setCommentText] = useState('');
@@ -40,10 +77,92 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
   const [critiqueFocus, setCritiqueFocus] = useState('Technique Fix');
   const [isVideoCritiqueMode, setIsVideoCritiqueMode] = useState(false);
   const [videoTitle, setVideoTitle] = useState('Mentor Video Review & Technique Fix');
+  const [started, setStarted] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
+  const [descExpanded, setDescExpanded] = useState(false);
+  const viewCountedRef = useRef(false);
+
+  // Inline video player (YouTube-style: plays in the frame, with native controls
+  // including fullscreen). Created unconditionally to satisfy the rules of hooks.
+  const player = useVideoPlayer(videoUrl, (p) => {
+    p.loop = false;
+  });
+
+  // Load + AUTOPLAY the video as soon as the detail opens; pause when it closes.
+  // We start playback the instant the player reports it is ready (statusChange),
+  // so opening a video is consistently immediate instead of occasionally stalling.
+  useEffect(() => {
+    setDescExpanded(false);
+    viewCountedRef.current = false;
+    setVideoReady(false);
+
+    if (!visible || !videoUrl) {
+      setStarted(false);
+      try {
+        player.pause();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+
+    setStarted(true);
+    let cancelled = false;
+
+    const sub = player.addListener('statusChange', ({ status }) => {
+      if (cancelled) return;
+      if (status === 'readyToPlay') {
+        setVideoReady(true);
+        try {
+          player.play();
+        } catch {
+          /* ignore */
+        }
+      }
+    });
+
+    // replaceAsync avoids the main-thread asset load that replace() warns about.
+    (async () => {
+      try {
+        await player.replaceAsync(videoUrl);
+        if (!cancelled) player.play();
+      } catch {
+        /* ignore */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [videoUrl, visible]);
+
+  // Count a unique view after ~4s of playback (once per open).
+  useEffect(() => {
+    if (!started || !post || viewCountedRef.current) return;
+    const t = setTimeout(() => {
+      if (!viewCountedRef.current) {
+        viewCountedRef.current = true;
+        void recordPostView(post.id);
+      }
+    }, 4000);
+    return () => clearTimeout(t);
+  }, [started, post?.id]);
+
+  // Join this post's room so new comments/critiques appear live while viewing.
+  useEffect(() => {
+    if (!visible || !post) return;
+    const sock = getSocket();
+    sock?.emit('post:subscribe', { postId: post.id });
+    return () => {
+      sock?.emit('post:unsubscribe', { postId: post.id });
+    };
+  }, [visible, post?.id]);
 
   if (!post) return null;
 
   const isMentor = selectedRole === 'Mentor';
+  const isSaved = !!post.isSaved;
 
   const mentorCritiques = post.comments?.filter((c) => c.isMentorCritique || c.commentType === 'mentor') || [];
   const generalComments = post.comments?.filter((c) => !c.isMentorCritique && c.commentType !== 'mentor') || [];
@@ -57,7 +176,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
 
   const handleSendComment = () => {
     if (!commentText.trim() && !isVideoCritiqueMode) {
-      Alert.alert('Empty Comment', 'Please enter your thoughts or critique feedback.');
+      Alert.alert('Empty Comment', 'Please enter your feedback or critique notes.');
       return;
     }
 
@@ -66,7 +185,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
     if (isSubmittingMentorCritique && !isMentor) {
       Alert.alert(
         'Mentor Feature',
-        'You are currently in Learner persona. Switch to "Mentor Pro" to submit verified critiques, ratings, and video breakdowns.'
+        'You are currently in Learner persona. Switch to "Mentor Pro" to submit verified critiques and video breakdowns.'
       );
       return;
     }
@@ -77,10 +196,6 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
       isMentorCritique: isSubmittingMentorCritique,
       mentorRating: isSubmittingMentorCritique ? mentorRating : undefined,
       critiqueFocus: isSubmittingMentorCritique ? critiqueFocus : undefined,
-      videoCritiqueThumbnail: isVideoCritiqueMode
-        ? 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=500&auto=format&fit=crop&q=80'
-        : undefined,
-      videoCritiqueDuration: isVideoCritiqueMode ? '1:15' : undefined,
       videoCritiqueTitle: isVideoCritiqueMode ? videoTitle : undefined,
     });
 
@@ -88,8 +203,31 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
     setIsVideoCritiqueMode(false);
   };
 
-  const handlePlayVideo = (title: string) => {
-    Alert.alert('Playing Video ▶', `Streaming video playback for: "${title}"`);
+  const handleStartPlay = () => {
+    if (videoUrl) {
+      setStarted(true);
+      try {
+        player.play();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    if (post.audioUrl) {
+      playAudioPost(post);
+      return;
+    }
+    Alert.alert('Media Unavailable', 'This clip is still processing or was not uploaded.');
+  };
+
+  const handleShare = async () => {
+    try {
+      await Share.share({
+        message: `Check out this practice video by ${post.authorName} on Lernex: "${post.videoTitle || post.content.substring(0, 40)}"`,
+      });
+    } catch {
+      Alert.alert('Share', 'Share link copied! 🔗');
+    }
   };
 
   return (
@@ -99,12 +237,12 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
           style={styles.modalContainer}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          {/* Top Bar & Header */}
+          {/* Top Bar Drag Handle & Close */}
           <View style={styles.topBar}>
             <View style={styles.dragPill} />
             <View style={styles.headerRow}>
               <View style={styles.communityTag}>
-                <Ionicons name="people" size={14} color="#4F46E5" />
+                <Ionicons name="people-outline" size={13} color="#4F46E5" />
                 <Text style={styles.communityTagText}>{post.communityName}</Text>
               </View>
 
@@ -115,19 +253,118 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
           </View>
 
           <ScrollView style={styles.scrollArea} showsVerticalScrollIndicator={false}>
-            {/* Original Post Card Preview */}
-            <View style={styles.originalPostCard}>
+            {/* ================= YOUTUBE LAYOUT ORDER ================= */}
+            
+            {/* 1. VERY TOP: Inline Video Player (YouTube-style) */}
+            {post.postType === 'image' && (post.imageUrls?.length ?? 0) > 0 ? (
+              <PhotoCarousel urls={post.imageUrls!} radius={20} dotsBelow />
+            ) : (
+            <View style={styles.ytVideoPlayerWrapper}>
+              {started && videoUrl ? (
+                <>
+                  <VideoView
+                    player={player}
+                    style={styles.ytVideoThumbnail}
+                    nativeControls
+                    fullscreenOptions={{ enable: true }}
+                    allowsPictureInPicture
+                    contentFit="contain"
+                  />
+                  {/* Instant poster while the player warms up — avoids a black
+                      flash so the video feels like it opens immediately. */}
+                  {!videoReady && (
+                    <View style={styles.ytLoadingOverlay} pointerEvents="none">
+                      {post.videoThumbnail ? (
+                        <Image
+                          source={{ uri: post.videoThumbnail }}
+                          style={styles.ytVideoThumbnail}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View style={[styles.ytVideoThumbnail, styles.ytVideoPlaceholder]} />
+                      )}
+                      <View style={styles.ytLoadingSpinner}>
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      </View>
+                    </View>
+                  )}
+                </>
+              ) : (
+                <TouchableOpacity activeOpacity={0.9} onPress={handleStartPlay} style={styles.ytVideoTapArea}>
+                  {post.videoThumbnail ? (
+                    <Image
+                      source={{ uri: post.videoThumbnail }}
+                      style={styles.ytVideoThumbnail}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <View style={[styles.ytVideoThumbnail, styles.ytVideoPlaceholder]}>
+                      {post.postType === 'audio' ? (
+                        <MusicAnimation active={audioPost?.id === post.id ? isAudioPlaying : true} live={audioPost?.id === post.id} size={90} />
+                      ) : (
+                        <Ionicons name="videocam" size={48} color="#334155" />
+                      )}
+                    </View>
+                  )}
+
+                  <LinearGradient
+                    colors={['transparent', 'rgba(15, 23, 42, 0.75)']}
+                    style={styles.ytVideoOverlay}
+                  >
+                    <View style={styles.ytPlayCircle}>
+                      <Ionicons
+                        name={post.postType === 'audio' && audioPost?.id === post.id && isAudioPlaying ? 'pause' : 'play'}
+                        size={28}
+                        color="#FFFFFF"
+                        style={{ marginLeft: post.postType === 'audio' && audioPost?.id === post.id && isAudioPlaying ? 0 : 3 }}
+                      />
+                    </View>
+
+                    {!!post.videoDuration && (
+                      <View style={styles.ytDurationBadge}>
+                        <Ionicons name="videocam-outline" size={12} color="#FFFFFF" />
+                        <Text style={styles.ytDurationBadgeText}>{post.videoDuration}</Text>
+                      </View>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+              )}
+            </View>
+            )}
+
+            {/* 2. Video Title & Sub-Info */}
+            <View style={styles.titleBlock}>
+              <Text style={styles.ytVideoTitle}>
+                {post.videoTitle || post.content.split('.')[0]}
+              </Text>
+              <View style={styles.ytSubInfoRow}>
+                <Text style={styles.ytSubInfoText}>
+                  {post.viewsCount && post.viewsCount >= 1000
+                    ? `${(post.viewsCount / 1000).toFixed(1)}k views`
+                    : `${post.viewsCount ?? 0} views`}
+                </Text>
+                <Text style={styles.ytDot}>•</Text>
+                <Text style={styles.ytSubInfoText}>{post.timeAgo}</Text>
+                <Text style={styles.ytDot}>•</Text>
+                <Text style={styles.ytTagText}>{post.tag || '#Practice'}</Text>
+              </View>
+            </View>
+
+            {/* 3. Creator / Channel Info Row */}
+            <View style={styles.creatorRow}>
               <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() =>
                   openUserProfile({
+                    id: post.authorId,
                     name: post.authorName,
                     avatarUrl: post.authorAvatar,
                     role: post.authorRole,
+                    specialty: post.authorSkill,
                     badge: post.authorRole === 'Mentor' ? 'Verified Mentor' : 'Community Member',
                   })
                 }
-                style={styles.authorRow}
+                style={styles.creatorLeft}
               >
                 <Avatar
                   uri={post.authorAvatar}
@@ -135,44 +372,100 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                   size={42}
                   showRing={post.authorRole === 'Mentor'}
                 />
-                <View style={styles.authorMeta}>
-                  <Text style={styles.authorName}>{post.authorName}</Text>
-                  <Text style={styles.authorRoleTag}>{post.authorRole} • {post.timeAgo}</Text>
-                </View>
-                <View style={styles.tagPill}>
-                  <Text style={styles.tagPillText}>{post.tag}</Text>
+                <View style={styles.creatorMeta}>
+                  <View style={styles.creatorNameLine}>
+                    <Text style={styles.creatorName}>{post.authorName}</Text>
+                    {post.authorRole === 'Mentor' && (
+                      <Ionicons name="checkmark-circle" size={14} color="#6366F1" />
+                    )}
+                  </View>
+                  <Text style={styles.creatorSubText}>
+                    {post.authorRole === 'Mentor' ? 'Verified Mentor' : 'Learner'} • {post.authorSkill || 'Member'}
+                  </Text>
                 </View>
               </TouchableOpacity>
+            </View>
 
-              {post.videoTitle && (
-                <Text style={styles.postTitle}>{post.videoTitle}</Text>
-              )}
-              <Text style={styles.postBody}>{post.content}</Text>
+            {/* 4. Action Buttons Bar (Like, Save, Share) */}
+            <View style={styles.actionsBar}>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => toggleLikePost(post.id)}
+                style={[styles.actionBtn, post.isLiked && styles.actionBtnLiked]}
+              >
+                <Ionicons
+                  name={post.isLiked ? 'heart' : 'heart-outline'}
+                  size={16}
+                  color={post.isLiked ? '#EF4444' : '#475569'}
+                />
+                <Text style={[styles.actionBtnText, post.isLiked && { color: '#EF4444', fontWeight: 'bold' }]}>
+                  {post.likesCount} Likes
+                </Text>
+              </TouchableOpacity>
 
-              {/* Video Player Box */}
-              {post.videoThumbnail && (
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => {
+                  toggleSavePost(post.id);
+                  Alert.alert(
+                    !isSaved ? 'Saved to Vault 🔖' : 'Removed',
+                    !isSaved ? 'Video saved to your library.' : 'Removed from library.'
+                  );
+                }}
+                style={[styles.actionBtn, isSaved && styles.actionBtnSaved]}
+              >
+                <Ionicons
+                  name={isSaved ? 'bookmark' : 'bookmark-outline'}
+                  size={16}
+                  color={isSaved ? '#F59E0B' : '#475569'}
+                />
+                <Text style={[styles.actionBtnText, isSaved && { color: '#F59E0B', fontWeight: 'bold' }]}>
+                  {isSaved ? 'Saved' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => pressRepost(post)}
+                style={[styles.actionBtn, post.isReposted && { backgroundColor: '#DCFCE7' }]}
+              >
+                <MaterialCommunityIcons name="repeat" size={18} color={post.isReposted ? '#16A34A' : '#475569'} />
+                <Text style={[styles.actionBtnText, post.isReposted && { color: '#16A34A', fontWeight: 'bold' }]}>
+                  {post.repostsCount ?? 0}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity activeOpacity={0.7} onPress={handleShare} style={styles.actionBtn}>
+                <Ionicons name="paper-plane-outline" size={16} color="#475569" />
+                <Text style={styles.actionBtnText}>Share</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* 5. Video Description Box (collapsed with a "more" toggle) */}
+            <View style={styles.descriptionBox}>
+              <Text style={styles.descriptionLabel}>Description</Text>
+              <Text
+                style={styles.descriptionBody}
+                numberOfLines={descExpanded ? undefined : 2}
+              >
+                {post.content}
+              </Text>
+              {post.content.length > 90 && (
                 <TouchableOpacity
-                  activeOpacity={0.9}
-                  onPress={() => handlePlayVideo(post.videoTitle || post.content)}
-                  style={styles.videoPlayerBox}
+                  activeOpacity={0.7}
+                  onPress={() => setDescExpanded((v) => !v)}
+                  style={styles.descMoreBtn}
                 >
-                  <Image source={{ uri: post.videoThumbnail }} style={styles.videoThumbnail} />
-                  <View style={styles.videoOverlay}>
-                    <LinearGradient
-                      colors={['transparent', 'rgba(15, 23, 42, 0.8)']}
-                      style={styles.videoGradient}
-                    >
-                      <View style={styles.playCircle}>
-                        <Ionicons name="play" size={26} color="#FFFFFF" style={{ marginLeft: 2 }} />
-                      </View>
-                      <View style={styles.videoDurationBadge}>
-                        <Ionicons name="videocam" size={12} color="#FFFFFF" />
-                        <Text style={styles.videoDurationText}>{post.videoDuration || '0:45'}</Text>
-                      </View>
-                    </LinearGradient>
-                  </View>
+                  <Text style={styles.descMoreText}>{descExpanded ? 'Show less' : '…more'}</Text>
                 </TouchableOpacity>
               )}
+            </View>
+
+            {/* 6. Comments & Critiques Section */}
+            <View style={styles.commentsSectionHeader}>
+              <Text style={styles.commentsTitle}>
+                Comments & Critiques ({post.comments?.length || 0})
+              </Text>
             </View>
 
             {/* Segmented Comments Filter Tabs */}
@@ -193,7 +486,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                 style={[styles.filterTab, commentTypeTab === 'mentor' && styles.filterTabActiveMentor]}
               >
                 <Ionicons
-                  name="star"
+                  name="ribbon-outline"
                   size={12}
                   color={commentTypeTab === 'mentor' ? '#7C3AED' : '#64748B'}
                 />
@@ -208,7 +501,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                 style={[styles.filterTab, commentTypeTab === 'general' && styles.filterTabActiveGeneral]}
               >
                 <Ionicons
-                  name="chatbubbles"
+                  name="chatbubbles-outline"
                   size={12}
                   color={commentTypeTab === 'general' ? '#4F46E5' : '#64748B'}
                 />
@@ -236,7 +529,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                       {isCritique && (
                         <View style={styles.mentorCritiqueBanner}>
                           <View style={styles.mentorCritiqueBannerLeft}>
-                            <Ionicons name="star" size={13} color="#7C3AED" />
+                            <Ionicons name="checkmark-circle" size={13} color="#7C3AED" />
                             <Text style={styles.mentorCritiqueBannerText}>
                               VERIFIED MENTOR CRITIQUE
                             </Text>
@@ -254,6 +547,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                         activeOpacity={0.8}
                         onPress={() =>
                           openUserProfile({
+                            id: comment.authorId,
                             name: comment.authorName,
                             avatarUrl: comment.authorAvatar,
                             role: comment.authorRole,
@@ -287,7 +581,6 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                         </View>
                       </TouchableOpacity>
 
-                      {/* Text content */}
                       <Text style={styles.commentText}>{comment.text}</Text>
 
                       {/* Mentor Video Critique Thumbnail */}
@@ -295,7 +588,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                         <TouchableOpacity
                           activeOpacity={0.88}
                           onPress={() =>
-                            handlePlayVideo(comment.videoCritiqueTitle || 'Mentor Technique Fix')
+                            Alert.alert('Mentor Video Critique', 'Mentor video critiques are coming soon.')
                           }
                           style={styles.critiqueVideoBox}
                         >
@@ -312,7 +605,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                                 {comment.videoCritiqueTitle || 'Mentor Technique Demonstration'}
                               </Text>
                               <Text style={styles.critiqueVideoDuration}>
-                                {comment.videoCritiqueDuration || '1:15'} • Tap to Watch Breakdown
+                                {comment.videoCritiqueDuration || '1:15'} • Tap to Watch
                               </Text>
                             </View>
                           </View>
@@ -340,6 +633,27 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                             {comment.likesCount}
                           </Text>
                         </TouchableOpacity>
+
+                        {comment.authorId && user?.id === comment.authorId && (
+                          <TouchableOpacity
+                            activeOpacity={0.7}
+                            onPress={() =>
+                              showDialog({
+                                title: 'Delete Comment',
+                                message: 'This will remove your comment. This cannot be undone.',
+                                icon: 'trash-outline',
+                                confirmText: 'Delete',
+                                cancelText: 'Cancel',
+                                isDestructive: true,
+                                onConfirm: () => deleteComment(comment.id),
+                              })
+                            }
+                            style={styles.commentLikeBtn}
+                          >
+                            <Ionicons name="trash-outline" size={13} color="#94A3B8" />
+                            <Text style={styles.commentLikeCount}>Delete</Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
                     </View>
                   );
@@ -353,9 +667,8 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
             </View>
           </ScrollView>
 
-          {/* Bottom Action & Input Bar */}
+          {/* Bottom Comment Composer Input Bar */}
           <View style={styles.bottomInputBar}>
-            {/* If user is Mentor, allow toggling between General Comment and Mentor Critique */}
             {isMentor && (
               <View style={styles.composeTypeRow}>
                 <Text style={styles.replyingAsLabel}>Posting as:</Text>
@@ -385,7 +698,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                   style={[styles.composeTypeBtn, composeType === 'mentor' && styles.composeTypeBtnMentorActive]}
                 >
                   <Ionicons
-                    name="star"
+                    name="ribbon-outline"
                     size={12}
                     color={composeType === 'mentor' ? '#FFFFFF' : '#7C3AED'}
                   />
@@ -401,60 +714,14 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
               </View>
             )}
 
-            {/* Optional Mentor Tools Row (If Critique mode) */}
-            {composeType === 'mentor' && (
-              <View style={styles.mentorToolsRow}>
-                {/* Rating Picker */}
-                <View style={styles.ratingPickerRow}>
-                  <Text style={styles.toolLabel}>Rating:</Text>
-                  {[3, 4, 5].map((star) => (
-                    <TouchableOpacity
-                      key={star}
-                      onPress={() => setMentorRating(star)}
-                      style={[styles.starPickBtn, mentorRating === star && styles.starPickBtnActive]}
-                    >
-                      <Text style={[styles.starPickText, mentorRating === star && styles.starPickTextActive]}>
-                        {star}★
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                {/* Video Demo Toggle */}
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => setIsVideoCritiqueMode(!isVideoCritiqueMode)}
-                  style={[
-                    styles.videoCritiqueToggle,
-                    isVideoCritiqueMode && styles.videoCritiqueToggleActive,
-                  ]}
-                >
-                  <Ionicons
-                    name={isVideoCritiqueMode ? 'videocam' : 'videocam-outline'}
-                    size={13}
-                    color={isVideoCritiqueMode ? '#FFFFFF' : '#7C3AED'}
-                  />
-                  <Text
-                    style={[
-                      styles.videoCritiqueToggleText,
-                      isVideoCritiqueMode && styles.videoCritiqueToggleTextActive,
-                    ]}
-                  >
-                    {isVideoCritiqueMode ? 'Video Fix Attached' : '+ Add Video Demo'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* Input Row */}
             <View style={styles.inputBoxRow}>
               <TextInput
                 value={commentText}
                 onChangeText={setCommentText}
                 placeholder={
                   composeType === 'mentor'
-                    ? 'Write actionable mentor critique & technique advice...'
-                    : 'Share encouragement or feedback...'
+                    ? 'Write actionable mentor critique advice...'
+                    : 'Add a comment...'
                 }
                 placeholderTextColor="#94A3B8"
                 style={styles.textInput}
@@ -482,19 +749,17 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
 const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
     justifyContent: 'flex-end',
   },
   modalContainer: {
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: borderRadius.xxl,
-    borderTopRightRadius: borderRadius.xxl,
-    height: '92%',
+    height: '100%',
   },
   topBar: {
     paddingHorizontal: spacing.base,
     paddingTop: spacing.xs + 2,
-    paddingBottom: spacing.sm,
+    paddingBottom: spacing.xs,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
   },
@@ -504,7 +769,7 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: '#CBD5E1',
     alignSelf: 'center',
-    marginBottom: spacing.xs,
+    marginBottom: 6,
   },
   headerRow: {
     flexDirection: 'row',
@@ -526,157 +791,235 @@ const styles = StyleSheet.create({
     color: '#4F46E5',
   },
   closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  personaBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: borderRadius.md,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    marginTop: 6,
-    gap: 6,
-  },
-  personaLabel: {
-    fontSize: 10,
-    color: '#64748B',
-    fontWeight: 'bold',
-  },
-  personaChip: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: borderRadius.full,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  personaChipActive: {
-    backgroundColor: '#EEF2FF',
-    borderColor: '#4F46E5',
-  },
-  personaChipActiveMentor: {
-    backgroundColor: '#FAF5FF',
-    borderColor: '#7C3AED',
-  },
-  personaChipText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  personaChipTextActive: {
-    color: '#4F46E5',
-    fontWeight: 'bold',
-  },
-  personaChipTextActiveMentor: {
-    color: '#7C3AED',
-    fontWeight: 'bold',
   },
   scrollArea: {
     flex: 1,
     paddingHorizontal: spacing.base,
   },
-  originalPostCard: {
-    backgroundColor: '#F8FAFC',
+  // 1. YouTube Video Player Box
+  ytVideoPlayerWrapper: {
+    width: '100%',
+    height: 210,
     borderRadius: borderRadius.xl,
-    padding: spacing.md,
-    marginVertical: spacing.sm,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  authorRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  authorMeta: {
-    marginLeft: 8,
-    flex: 1,
-  },
-  authorName: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: '#0F172A',
-  },
-  authorRoleTag: {
-    fontSize: 10,
-    color: '#64748B',
-  },
-  tagPill: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  tagPillText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#4F46E5',
-  },
-  postTitle: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: '#0F172A',
-    marginBottom: 4,
-  },
-  postBody: {
-    fontSize: 12,
-    color: '#334155',
-    lineHeight: 18,
-    marginBottom: 8,
-  },
-  videoPlayerBox: {
-    height: 140,
-    borderRadius: borderRadius.lg,
     overflow: 'hidden',
+    backgroundColor: '#0F172A',
+    marginTop: spacing.xs,
+    marginBottom: spacing.xs,
     position: 'relative',
-    backgroundColor: '#000000',
   },
-  videoThumbnail: {
+  ytVideoTapArea: {
     width: '100%',
     height: '100%',
   },
-  videoOverlay: {
-    ...StyleSheet.absoluteFillObject,
+  ytVideoThumbnail: {
+    width: '100%',
+    height: '100%',
   },
-  videoGradient: {
-    ...StyleSheet.absoluteFillObject,
+  ytVideoPlaceholder: {
+    backgroundColor: '#0F172A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ytLoadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0F172A',
+  },
+  ytLoadingSpinner: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    marginTop: -10,
+    marginLeft: -10,
+  },
+  ytVideoOverlay: {
+    ...StyleSheet.absoluteFill,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  playCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  ytPlayCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: 'rgba(79, 70, 229, 0.9)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
+    borderWidth: 2,
     borderColor: '#FFFFFF',
   },
-  videoDurationBadge: {
+  ytDurationBadge: {
     position: 'absolute',
     bottom: 8,
     right: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: borderRadius.full,
-    gap: 3,
+    borderRadius: 4,
+    gap: 4,
   },
-  videoDurationText: {
+  ytDurationBadgeText: {
     fontSize: 10,
     fontWeight: 'bold',
     color: '#FFFFFF',
+  },
+  // 2. Video Title Block
+  titleBlock: {
+    marginBottom: spacing.xs,
+  },
+  ytVideoTitle: {
+    fontSize: 16,
+    fontWeight: typography.weights.bold,
+    color: '#0F172A',
+    lineHeight: 22,
+    marginBottom: 4,
+  },
+  ytSubInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  ytSubInfoText: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  ytDot: {
+    fontSize: 11,
+    color: '#94A3B8',
+  },
+  ytTagText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#4F46E5',
+  },
+  // 3. Creator Info Row
+  creatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#F1F5F9',
+    marginBottom: spacing.xs,
+  },
+  creatorLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  creatorMeta: {
+    marginLeft: 10,
+    flex: 1,
+  },
+  creatorNameLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  creatorName: {
+    fontSize: 14,
+    fontWeight: typography.weights.bold,
+    color: '#0F172A',
+  },
+  creatorSubText: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  followBtn: {
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: borderRadius.full,
+  },
+  followBtnActive: {
+    backgroundColor: '#F1F5F9',
+  },
+  followBtnText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  followBtnTextActive: {
+    color: '#475569',
+  },
+  // 4. Action Buttons Bar
+  actionsBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: spacing.base,
+  },
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: borderRadius.full,
+    gap: 6,
+  },
+  actionBtnLiked: {
+    backgroundColor: '#FEE2E2',
+  },
+  actionBtnSaved: {
+    backgroundColor: '#FEF3C7',
+  },
+  actionBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  // 5. Video Description Box
+  descriptionBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: borderRadius.xl,
+    padding: spacing.md,
+    marginBottom: spacing.base,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  descriptionLabel: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#64748B',
+    marginBottom: 4,
+  },
+  descriptionBody: {
+    fontSize: 13,
+    color: '#334155',
+    lineHeight: 19,
+  },
+  descMoreBtn: {
+    marginTop: 4,
+    alignSelf: 'flex-start',
+  },
+  descMoreText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
+  // 6. Comments Section
+  commentsSectionHeader: {
+    marginBottom: 8,
+  },
+  commentsTitle: {
+    fontSize: 14,
+    fontWeight: typography.weights.bold,
+    color: '#0F172A',
   },
   commentsFilterTabs: {
     flexDirection: 'row',
@@ -727,7 +1070,7 @@ const styles = StyleSheet.create({
   },
   commentsList: {
     gap: spacing.sm,
-    paddingBottom: spacing.lg,
+    paddingBottom: spacing.xl,
   },
   commentCard: {
     backgroundColor: '#FFFFFF',
@@ -760,7 +1103,7 @@ const styles = StyleSheet.create({
   },
   mentorCritiqueBannerText: {
     fontSize: 9,
-    fontWeight: 'heavy',
+    fontWeight: 'bold',
     color: '#6B21A8',
   },
   ratingBadgePill: {
@@ -800,7 +1143,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3E8FF',
     paddingHorizontal: 5,
     paddingVertical: 1,
-    borderRadius: 3,
+    borderRadius: 4,
   },
   mentorBadgeSmallText: {
     fontSize: 8,
@@ -808,49 +1151,49 @@ const styles = StyleSheet.create({
     color: '#7C3AED',
   },
   learnerBadgeSmall: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#F1F5F9',
     paddingHorizontal: 5,
     paddingVertical: 1,
-    borderRadius: 3,
+    borderRadius: 4,
   },
   learnerBadgeSmallText: {
     fontSize: 8,
     fontWeight: 'bold',
-    color: '#4F46E5',
+    color: '#64748B',
   },
   commentTime: {
-    fontSize: 9,
+    fontSize: 10,
     color: '#94A3B8',
   },
   commentText: {
     fontSize: 12,
     color: '#334155',
-    lineHeight: 18,
+    lineHeight: 17,
   },
   critiqueVideoBox: {
-    height: 70,
-    borderRadius: borderRadius.md,
+    height: 90,
+    borderRadius: borderRadius.lg,
     overflow: 'hidden',
-    marginTop: 6,
     position: 'relative',
-    backgroundColor: '#000000',
+    marginTop: 8,
+    backgroundColor: '#0F172A',
   },
   critiqueVideoImg: {
     width: '100%',
     height: '100%',
   },
   critiqueVideoOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    ...StyleSheet.absoluteFill,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    gap: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    paddingHorizontal: 10,
+    gap: 10,
   },
   critiquePlayBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     backgroundColor: '#7C3AED',
     alignItems: 'center',
     justifyContent: 'center',
@@ -864,60 +1207,59 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   critiqueVideoDuration: {
-    fontSize: 9,
-    color: '#E9D5FF',
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.8)',
+    marginTop: 2,
   },
   commentActions: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: 4,
+    alignItems: 'center',
+    gap: 18,
+    marginTop: 8,
   },
   commentLikeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
+    gap: 5,
+    paddingVertical: 4,
     paddingHorizontal: 6,
-    paddingVertical: 2,
   },
   commentLikeCount: {
-    fontSize: 10,
+    fontSize: 11,
     color: '#64748B',
   },
   emptyBox: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 30,
-    gap: 8,
+    padding: 20,
   },
   emptyText: {
     fontSize: 12,
     color: '#94A3B8',
+    marginTop: 4,
   },
   bottomInputBar: {
-    paddingHorizontal: spacing.base,
-    paddingTop: spacing.xs + 2,
-    paddingBottom: Platform.OS === 'ios' ? spacing.lg : spacing.sm + 4,
     backgroundColor: '#FFFFFF',
     borderTopWidth: 1,
     borderTopColor: '#F1F5F9',
-    gap: 6,
+    paddingHorizontal: spacing.base,
+    paddingVertical: spacing.xs + 2,
   },
   composeTypeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
+    marginBottom: 8,
   },
   replyingAsLabel: {
-    fontSize: 10,
-    fontWeight: 'bold',
+    fontSize: 11,
     color: '#64748B',
   },
   composeTypeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    paddingHorizontal: 9,
-    paddingVertical: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: borderRadius.full,
     borderWidth: 1,
     borderColor: '#E2E8F0',
@@ -933,98 +1275,34 @@ const styles = StyleSheet.create({
   },
   composeTypeBtnText: {
     fontSize: 10,
-    fontWeight: 'bold',
+    fontWeight: '600',
     color: '#64748B',
   },
   composeTypeBtnTextActive: {
     color: '#FFFFFF',
-  },
-  mentorToolsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#FAF5FF',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: borderRadius.md,
-    borderWidth: 1,
-    borderColor: '#E9D5FF',
-  },
-  ratingPickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  toolLabel: {
-    fontSize: 10,
     fontWeight: 'bold',
-    color: '#6B21A8',
-  },
-  starPickBtn: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: '#E9D5FF',
-  },
-  starPickBtnActive: {
-    backgroundColor: '#D97706',
-    borderColor: '#D97706',
-  },
-  starPickText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#7C3AED',
-  },
-  starPickTextActive: {
-    color: '#FFFFFF',
-  },
-  videoCritiqueToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: borderRadius.full,
-    borderWidth: 1,
-    borderColor: '#C084FC',
-    gap: 4,
-  },
-  videoCritiqueToggleActive: {
-    backgroundColor: '#7C3AED',
-    borderColor: '#7C3AED',
-  },
-  videoCritiqueToggleText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#7C3AED',
-  },
-  videoCritiqueToggleTextActive: {
-    color: '#FFFFFF',
   },
   inputBoxRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
+  },
+  textInput: {
+    flex: 1,
     backgroundColor: '#F8FAFC',
     borderRadius: borderRadius.xl,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: 4,
-    gap: 6,
-  },
-  textInput: {
-    flex: 1,
-    fontSize: 13,
-    color: colors.textPrimary,
-    maxHeight: 70,
-    paddingVertical: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 12,
+    color: '#0F172A',
+    maxHeight: 80,
   },
   sendBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },

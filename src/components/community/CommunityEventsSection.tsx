@@ -1,409 +1,271 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Platform,
-} from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { useApp } from '../../context/AppContext';
+import { getEventCatalogRequest } from '../../api/competition.api';
 import { CommunityEvent, UserRole } from '../../types';
-import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
+import { borderRadius, spacing, typography } from '../../theme';
+import { EventCreateModal } from './EventCreateModal';
 
 interface CommunityEventsSectionProps {
   events: CommunityEvent[];
   communityId?: string;
+  communityName?: string;
   selectedRole?: UserRole | null;
   onSelectEvent: (event: CommunityEvent) => void;
+}
+
+type Chip = { label: string; color: string; bg: string; icon: keyof typeof Ionicons.glyphMap };
+
+/** What the viewer should see for an event, by phase and their status. */
+export function eventStatus(e: CommunityEvent): Chip {
+  if (e.phase === 'voting') {
+    if (e.hasVoted) return { label: 'You’re in · waiting to start', color: '#15803D', bg: '#DCFCE7', icon: 'checkmark-circle' };
+    if (!e.myTrackAvailable) return { label: `No ${e.myRole ?? 'your'} track`, color: '#64748B', bg: '#F1F5F9', icon: 'lock-closed' };
+    return { label: 'Vote to join', color: '#FFFFFF', bg: '#7C3AED', icon: 'hand-left' };
+  }
+  if (!e.hasVoted) return { label: 'Voting closed', color: '#64748B', bg: '#F1F5F9', icon: 'lock-closed' };
+  const pct = e.my?.pct ?? 0;
+  if (pct >= 100) return { label: 'All tasks done 🎉', color: '#15803D', bg: '#DCFCE7', icon: 'trophy' };
+  if ((e.my?.collectable ?? 0) > 0) return { label: `+${e.my?.collectable} XP to collect`, color: '#FFFFFF', bg: '#16A34A', icon: 'gift' };
+  return { label: `${pct}% complete`, color: '#4F46E5', bg: '#EEF2FF', icon: 'hourglass' };
+}
+
+/** "Voting · 14h left" / "Live · 5d left". */
+export function phaseLabel(e: CommunityEvent): { text: string; icon: keyof typeof Ionicons.glyphMap } {
+  if (e.phase === 'voting') return { text: `Voting · ${e.votingHoursLeft}h left`, icon: 'hand-left' };
+  return { text: `Live · ${e.daysLeft}d left`, icon: 'radio' };
 }
 
 export const CommunityEventsSection: React.FC<CommunityEventsSectionProps> = ({
   events,
   communityId,
-  selectedRole,
+  communityName,
   onSelectEvent,
 }) => {
-  const [roleFilter, setRoleFilter] = useState<'Learner' | 'Mentor'>(
-    selectedRole === 'Mentor' ? 'Mentor' : 'Learner'
-  );
+  const { user } = useApp();
+  const [rules, setRules] = useState<string[]>([]);
+  const [showRules, setShowRules] = useState(false);
+  const [creating, setCreating] = useState(false);
 
-  const filteredEvents = events.filter((e) => {
-    const matchesCommunity = !communityId || e.communityId === communityId;
-    const matchesRole = e.targetRole === roleFilter || e.targetRole === 'Both';
-    return matchesCommunity && matchesRole;
-  });
+  useEffect(() => {
+    getEventCatalogRequest()
+      .then((c) => setRules(c.rules))
+      .catch(() => setRules([]));
+  }, []);
+
+  const list = events.filter((e) => !communityId || e.communityId === communityId);
+
+  // Personal status across this circle's challenges.
+  const joined = list.filter((e) => e.hasVoted);
+  const myTasks = joined.flatMap((e) => e.my?.tasks ?? []);
+  const tasksDone = myTasks.filter((t) => t.done).length;
+  const xpEarned = joined.reduce((s, e) => s + (e.my?.xpEarned ?? 0), 0);
 
   return (
     <View style={styles.container}>
-      {/* Role Switcher Segment */}
-      <View style={styles.segmentWrapper}>
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={() => setRoleFilter('Learner')}
-          style={[
-            styles.segmentBtn,
-            roleFilter === 'Learner' && styles.segmentBtnActive,
-          ]}
-        >
-          <Ionicons
-            name="school-outline"
-            size={14}
-            color={roleFilter === 'Learner' ? '#FFFFFF' : '#64748B'}
-          />
-          <Text
-            style={[
-              styles.segmentBtnText,
-              roleFilter === 'Learner' && styles.segmentBtnTextActive,
-            ]}
-          >
-            Learner Challenges
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          activeOpacity={0.8}
-          onPress={() => setRoleFilter('Mentor')}
-          style={[
-            styles.segmentBtn,
-            roleFilter === 'Mentor' && styles.segmentBtnActive,
-          ]}
-        >
-          <Ionicons
-            name="ribbon-outline"
-            size={14}
-            color={roleFilter === 'Mentor' ? '#FFFFFF' : '#64748B'}
-          />
-          <Text
-            style={[
-              styles.segmentBtnText,
-              roleFilter === 'Mentor' && styles.segmentBtnTextActive,
-            ]}
-          >
-            Mentor Tasks
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      <Text style={styles.sectionSubtitle}>
-        {roleFilter === 'Mentor'
-          ? 'Speed critiques and masterclass workshops to rack up Mentorship XP.'
-          : 'Practice drills and stage challenges to sharpen technique and earn XP.'}
-      </Text>
-
-      {/* Events Vertical Cards List */}
-      <View style={styles.eventsList}>
-        {filteredEvents.map((event) => (
-          <TouchableOpacity
-            key={event.id}
-            activeOpacity={0.9}
-            onPress={() => onSelectEvent(event)}
-            style={[styles.eventCard, shadows.soft]}
-          >
-            {/* Card Header Gradient */}
-            <LinearGradient
-              colors={event.bannerGradient}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.cardHeaderGradient}
-            >
-              <View style={styles.headerLeftRow}>
-                <View style={styles.categoryPill}>
-                  <Ionicons
-                    name={event.icon as keyof typeof Ionicons.glyphMap}
-                    size={12}
-                    color="#FFFFFF"
-                  />
-                  <Text style={styles.categoryText}>
-                    {event.category.toUpperCase()}
-                  </Text>
-                </View>
-
-                <View style={styles.daysBadge}>
-                  <Ionicons name="time-outline" size={11} color="#FFFFFF" />
-                  <Text style={styles.daysText}>{event.daysLeft}d left</Text>
-                </View>
-              </View>
-
-              <View style={styles.xpBadge}>
-                <Ionicons name="flash" size={12} color="#FDE047" />
-                <Text style={styles.xpBadgeText}>+{event.xpReward} XP</Text>
-              </View>
-            </LinearGradient>
-
-            {/* Card Body */}
-            <View style={styles.cardBody}>
-              <Text style={styles.eventCardTitle}>{event.title}</Text>
-              <Text style={styles.eventCardSub}>{event.subtitle}</Text>
-
-              {event.bonusReward && (
-                <View style={styles.bonusBox}>
-                  <Ionicons name="gift-outline" size={13} color="#D97706" />
-                  <Text style={styles.bonusText} numberOfLines={1}>
-                    Bonus: {event.bonusReward}
-                  </Text>
-                </View>
-              )}
-
-              {/* Bottom Info and Action Row */}
-              <View style={styles.cardFooter}>
-                <View style={styles.participantsRow}>
-                  <Ionicons name="people-outline" size={13} color="#64748B" />
-                  <Text style={styles.participantsText}>
-                    {event.participantsCount} competing
-                  </Text>
-                </View>
-
-                <View
-                  style={[
-                    styles.actionPill,
-                    event.isCompleted && styles.actionPillCompleted,
-                    event.isJoined && !event.isCompleted && styles.actionPillJoined,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.actionPillText,
-                      event.isCompleted && styles.actionPillTextCompleted,
-                      event.isJoined && !event.isCompleted && styles.actionPillTextJoined,
-                    ]}
-                  >
-                    {event.isCompleted
-                      ? 'Completed'
-                      : event.isJoined
-                      ? 'Submit Take'
-                      : 'Join Challenge'}
-                  </Text>
-                  <Ionicons
-                    name={
-                      event.isCompleted
-                        ? 'checkmark-circle'
-                        : event.isJoined
-                        ? 'cloud-upload-outline'
-                        : 'chevron-forward'
-                    }
-                    size={12}
-                    color={
-                      event.isCompleted
-                        ? '#15803D'
-                        : event.isJoined
-                        ? '#4338CA'
-                        : '#4F46E5'
-                    }
-                  />
-                </View>
-              </View>
-            </View>
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Events & Challenges</Text>
+          <Text style={styles.subtitle}>Vote to join · separate Learner & Mentor tracks</Text>
+        </View>
+        {user?.isAdmin && communityId && (
+          <TouchableOpacity activeOpacity={0.85} onPress={() => setCreating(true)} style={styles.createBtn}>
+            <Ionicons name="add" size={16} color="#FFFFFF" />
+            <Text style={styles.createText}>Create</Text>
           </TouchableOpacity>
-        ))}
-
-        {filteredEvents.length === 0 && (
-          <View style={styles.emptyBox}>
-            <Ionicons name="calendar-outline" size={32} color="#94A3B8" />
-            <Text style={styles.emptyText}>No events currently active for this role</Text>
-          </View>
         )}
       </View>
+
+      {/* My status */}
+      {joined.length > 0 && (
+        <LinearGradient colors={['#1E1B4B', '#4338CA']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.statusCard}>
+          <Text style={styles.statusKicker}>YOUR CHALLENGE STATUS</Text>
+          <View style={styles.statusRow}>
+            <View style={styles.statusCell}>
+              <Text style={styles.statusNum}>{joined.length}</Text>
+              <Text style={styles.statusLabel}>joined</Text>
+            </View>
+            <View style={styles.statusDivider} />
+            <View style={styles.statusCell}>
+              <Text style={styles.statusNum}>
+                {tasksDone}/{myTasks.length}
+              </Text>
+              <Text style={styles.statusLabel}>tasks done</Text>
+            </View>
+            <View style={styles.statusDivider} />
+            <View style={styles.statusCell}>
+              <Text style={styles.statusNum}>{xpEarned}</Text>
+              <Text style={styles.statusLabel}>XP earned</Text>
+            </View>
+          </View>
+        </LinearGradient>
+      )}
+
+      {/* Rules */}
+      {rules.length > 0 && (
+        <TouchableOpacity activeOpacity={0.9} onPress={() => setShowRules((v) => !v)} style={styles.rulesCard}>
+          <View style={styles.rulesHeader}>
+            <Ionicons name="shield-checkmark" size={16} color="#0F766E" />
+            <Text style={styles.rulesTitle}>How events work (fair play)</Text>
+            <Ionicons name={showRules ? 'chevron-up' : 'chevron-down'} size={16} color="#0F766E" />
+          </View>
+          {showRules &&
+            rules.map((r, i) => (
+              <View key={i} style={styles.ruleRow}>
+                <Text style={styles.ruleDot}>•</Text>
+                <Text style={styles.ruleText}>{r}</Text>
+              </View>
+            ))}
+        </TouchableOpacity>
+      )}
+
+      {list.length === 0 ? (
+        <View style={styles.empty}>
+          <View style={styles.emptyIcon}>
+            <Ionicons name="trophy-outline" size={28} color="#7C3AED" />
+          </View>
+          <Text style={styles.emptyTitle}>No active events right now</Text>
+          <Text style={styles.emptyBody}>
+            {user?.isAdmin
+              ? 'Tap Create to launch a challenge. Members vote to join, then it goes live.'
+              : 'When the LERNEX team posts a challenge here, vote to join it.'}
+          </Text>
+        </View>
+      ) : (
+        list.map((e) => <EventCard key={e.id} event={e} onPress={() => onSelectEvent(e)} />)
+      )}
+
+      {communityId && (
+        <EventCreateModal visible={creating} communityId={communityId} communityName={communityName} onClose={() => setCreating(false)} />
+      )}
     </View>
   );
 };
 
+/** Event card — also used pinned at the top of a circle's feed. */
+export const EventCard: React.FC<{ event: CommunityEvent; onPress: () => void; compact?: boolean }> = ({ event: e, onPress, compact }) => {
+  const status = eventStatus(e);
+  const phase = phaseLabel(e);
+  const pct = e.my?.pct ?? 0;
+  const trackNames = [e.tracks.Learner && `🎓 ${e.tracks.Learner.name}`, e.tracks.Mentor && `✨ ${e.tracks.Mentor.name}`].filter(Boolean);
+
+  return (
+    <TouchableOpacity activeOpacity={0.92} onPress={onPress} style={styles.card}>
+      <LinearGradient colors={e.bannerGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.banner}>
+        <View style={styles.bannerTop}>
+          <View style={styles.phasePill}>
+            <Ionicons name={phase.icon} size={11} color="#FFFFFF" />
+            <Text style={styles.phaseText}>{phase.text}</Text>
+          </View>
+          <View style={[styles.phasePill, { backgroundColor: 'rgba(253,224,71,0.95)' }]}>
+            <Ionicons name="flash" size={11} color="#713F12" />
+            <Text style={[styles.phaseText, { color: '#713F12' }]}>up to {e.xpReward} XP</Text>
+          </View>
+        </View>
+        <Text style={styles.cardTitle} numberOfLines={2}>{e.title}</Text>
+        {!compact && trackNames.length > 0 && (
+          <View style={styles.trackRow}>
+            {trackNames.map((t) => (
+              <View key={t as string} style={styles.trackChip}>
+                <Text style={styles.trackChipText} numberOfLines={1}>{t}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </LinearGradient>
+
+      <View style={styles.body}>
+        {e.phase === 'live' && e.hasVoted ? (
+          <View style={styles.progressRow}>
+            <View style={styles.track}>
+              <View style={[styles.fill, { width: `${pct}%` }]} />
+            </View>
+            <Text style={styles.progressText}>{pct}%</Text>
+          </View>
+        ) : null}
+        <View style={styles.metaRow}>
+          <View style={[styles.statusChip, { backgroundColor: status.bg }]}>
+            <Ionicons name={status.icon} size={12} color={status.color} />
+            <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+          </View>
+          <Text style={styles.metaText}>
+            🗳 {e.votes.total} {e.phase === 'voting' ? `voted · needs ${e.minVoters}` : 'playing'}
+          </Text>
+        </View>
+      </View>
+    </TouchableOpacity>
+  );
+};
+
 const styles = StyleSheet.create({
-  container: {
-    paddingHorizontal: spacing.base,
-    paddingTop: spacing.xs,
-    paddingBottom: spacing.base,
-  },
-  segmentWrapper: {
-    flexDirection: 'row',
-    backgroundColor: '#F1F5F9',
-    borderRadius: borderRadius.lg,
-    padding: 3,
-    gap: 4,
-    marginBottom: 6,
-  },
-  segmentBtn: {
-    flex: 1,
+  container: { gap: 12 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  title: { fontSize: 16, fontWeight: typography.weights.bold, color: '#0F172A' },
+  subtitle: { fontSize: 11, color: '#64748B', marginTop: 1 },
+  createBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#0F766E',
+    paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: borderRadius.md,
-    gap: 6,
+    borderRadius: borderRadius.full,
   },
-  segmentBtnActive: {
-    backgroundColor: '#4F46E5',
-    shadowColor: '#4F46E5',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  segmentBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  segmentBtnTextActive: {
-    color: '#FFFFFF',
-    fontWeight: 'bold',
-  },
-  sectionSubtitle: {
-    fontSize: 11,
-    color: '#64748B',
-    marginBottom: 12,
-    lineHeight: 15,
-  },
-  eventsList: {
-    gap: 12,
-  },
-  eventCard: {
+  createText: { fontSize: 13, fontWeight: '800', color: '#FFFFFF' },
+
+  statusCard: { borderRadius: borderRadius.xl, padding: 14, gap: 10 },
+  statusKicker: { fontSize: 10, fontWeight: '800', color: '#A5B4FC', letterSpacing: 1 },
+  statusRow: { flexDirection: 'row', alignItems: 'center' },
+  statusCell: { flex: 1, alignItems: 'center' },
+  statusNum: { fontSize: 20, fontWeight: '800', color: '#FFFFFF' },
+  statusLabel: { fontSize: 11, color: '#C7D2FE' },
+  statusDivider: { width: 1, height: 28, backgroundColor: 'rgba(255,255,255,0.2)' },
+
+  rulesCard: { backgroundColor: '#F0FDFA', borderWidth: 1, borderColor: '#99F6E4', borderRadius: borderRadius.lg, padding: 12, gap: 6 },
+  rulesHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rulesTitle: { flex: 1, fontSize: 13, fontWeight: '700', color: '#115E59' },
+  ruleRow: { flexDirection: 'row', gap: 6 },
+  ruleDot: { color: '#0F766E', fontWeight: '800' },
+  ruleText: { flex: 1, fontSize: 12, color: '#134E4A', lineHeight: 17 },
+
+  empty: { alignItems: 'center', paddingVertical: 30, gap: 8 },
+  emptyIcon: { width: 58, height: 58, borderRadius: 29, backgroundColor: '#F3E8FF', alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A' },
+  emptyBody: { fontSize: 12, color: '#64748B', textAlign: 'center', paddingHorizontal: 30, lineHeight: 17 },
+
+  card: {
     backgroundColor: '#FFFFFF',
     borderRadius: borderRadius.xl,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#E2E8F0',
+    marginBottom: 2,
   },
-  cardHeaderGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
-  headerLeftRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  categoryPill: {
+  banner: { padding: spacing.md, gap: 8 },
+  bannerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  phasePill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(0, 0, 0, 0.22)',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-  },
-  categoryText: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    letterSpacing: 0.4,
-  },
-  daysBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-  },
-  daysText: {
-    fontSize: 9,
-    color: '#FFFFFF',
-    fontWeight: '600',
-  },
-  xpBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-    borderWidth: 1,
-    borderColor: 'rgba(253, 224, 71, 0.35)',
-  },
-  xpBadgeText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#FDE047',
-  },
-  cardBody: {
-    padding: spacing.md,
-    gap: 6,
-  },
-  eventCardTitle: {
-    fontSize: 15,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-  },
-  eventCardSub: {
-    fontSize: 12,
-    color: '#64748B',
-    lineHeight: 16,
-  },
-  bonusBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#FEF3C7',
-    paddingHorizontal: 8,
+    backgroundColor: 'rgba(15,23,42,0.3)',
+    paddingHorizontal: 9,
     paddingVertical: 4,
-    borderRadius: borderRadius.md,
-    marginTop: 2,
-  },
-  bonusText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#92400E',
-    flex: 1,
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
-    marginTop: 4,
-  },
-  participantsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  participantsText: {
-    fontSize: 11,
-    color: '#64748B',
-    fontWeight: '500',
-  },
-  actionPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
     borderRadius: borderRadius.full,
-    gap: 4,
   },
-  actionPillJoined: {
-    backgroundColor: '#E0E7FF',
-  },
-  actionPillCompleted: {
-    backgroundColor: '#DCFCE7',
-  },
-  actionPillText: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: '#4F46E5',
-  },
-  actionPillTextJoined: {
-    color: '#4338CA',
-  },
-  actionPillTextCompleted: {
-    color: '#15803D',
-  },
-  emptyBox: {
-    padding: spacing.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  emptyText: {
-    fontSize: 12,
-    color: '#94A3B8',
-  },
+  phaseText: { fontSize: 11, fontWeight: '800', color: '#FFFFFF' },
+  cardTitle: { fontSize: 18, fontWeight: '800', color: '#FFFFFF' },
+  trackRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  trackChip: { backgroundColor: 'rgba(255,255,255,0.18)', paddingHorizontal: 9, paddingVertical: 4, borderRadius: borderRadius.full, maxWidth: '100%' },
+  trackChipText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
+  body: { padding: spacing.md, gap: 8 },
+  progressRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  track: { flex: 1, height: 7, borderRadius: 4, backgroundColor: '#F1F5F9', overflow: 'hidden' },
+  fill: { height: '100%', borderRadius: 4, backgroundColor: '#7C3AED' },
+  progressText: { fontSize: 12, fontWeight: '800', color: '#4F46E5' },
+  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  statusChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 4, borderRadius: borderRadius.full, flexShrink: 1 },
+  statusText: { fontSize: 11, fontWeight: '800' },
+  metaText: { fontSize: 11, color: '#64748B', fontWeight: '600' },
 });

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -6,15 +6,18 @@ import {
   Modal,
   ScrollView,
   TouchableOpacity,
+  ActivityIndicator,
   Alert,
-  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '../../context/AppContext';
-import { CommunityEvent } from '../../types';
-import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
+import { getEventDetailRequest } from '../../api/competition.api';
+import { Avatar } from '../common/Avatar';
+import { CommunityEvent, CommunityEventDetail, EventTaskView, EventTrackView } from '../../types';
+import { spacing } from '../../theme';
+import { phaseLabel } from './CommunityEventsSection';
 
 interface CommunityEventModalProps {
   visible: boolean;
@@ -22,511 +25,395 @@ interface CommunityEventModalProps {
   onClose: () => void;
 }
 
-export const CommunityEventModal: React.FC<CommunityEventModalProps> = ({
-  visible,
-  event,
-  onClose,
-}) => {
+const TRACK_COLOR = { Learner: '#7C3AED', Mentor: '#0F766E' } as const;
+
+/**
+ * Event detail. Voting phase: vote / withdraw. Live phase: your verified task
+ * checklist, % and XP (collect anytime). Board: everyone's status.
+ */
+export const CommunityEventModal: React.FC<CommunityEventModalProps> = ({ visible, event: eventProp, onClose }) => {
   const insets = useSafeAreaInsets();
-  const { user, selectedRole, joinCommunityEvent, completeCommunityEvent } = useApp();
-  const [submitting, setSubmitting] = useState(false);
+  const { user, communityEvents, voteCommunityEvent, collectEventXp, endCommunityEvent, showDialog } = useApp();
+  const [detail, setDetail] = useState<CommunityEventDetail | null>(null);
+  const [tab, setTab] = useState<'challenge' | 'board'>('challenge');
+  const [busy, setBusy] = useState<'vote' | 'collect' | 'end' | null>(null);
 
-  if (!event) return null;
+  const load = useCallback(async () => {
+    if (!eventProp) return;
+    try {
+      setDetail(await getEventDetailRequest(eventProp.id));
+    } catch {
+      /* keep what we have */
+    }
+  }, [eventProp?.id]);
 
-  const isRoleMatched =
-    event.targetRole === 'Both' ||
-    (selectedRole === 'Mentor' && event.targetRole === 'Mentor') ||
-    (selectedRole !== 'Mentor' && event.targetRole === 'Learner');
+  useEffect(() => {
+    if (visible) {
+      setTab('challenge');
+      setDetail(null);
+      void load();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, eventProp?.id]);
 
-  const handleJoin = () => {
-    joinCommunityEvent(event.id);
-    Alert.alert(
-      'Challenge Joined',
-      `You have entered "${event.title}". Complete the requirements before the cycle ends to earn +${event.xpReward} XP.`
+  // Live refresh when events change anywhere (votes, admin ends it, etc.).
+  useEffect(() => {
+    if (visible) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [communityEvents]);
+
+  if (!eventProp) return null;
+  const e: CommunityEvent = detail ?? communityEvents.find((x) => x.id === eventProp.id) ?? eventProp;
+  const phase = phaseLabel(e);
+  const my = e.my;
+  const myTrack = my ? e.tracks[my.role] : e.myRole ? e.tracks[e.myRole] : null;
+
+  const vote = async (join: boolean) => {
+    setBusy('vote');
+    const okd = await voteCommunityEvent(e.id, join);
+    if (okd) await load();
+    setBusy(null);
+  };
+
+  const collect = async () => {
+    setBusy('collect');
+    const res = await collectEventXp(e.id);
+    await load();
+    setBusy(null);
+    if (!res.ok) return Alert.alert('Could not collect', res.message);
+    if (res.result.creatorNoXp) {
+      Alert.alert('Progress saved', 'You created this event, so it pays you no XP — that keeps it fair.');
+    } else if (res.result.earnedXP > 0) {
+      Alert.alert('XP collected ⚡', `+${res.result.earnedXP} XP (${res.result.pct}% complete). Keep going for the rest!`);
+    } else {
+      Alert.alert('Nothing new yet', `You’re at ${res.result.pct}%. Complete more tasks to unlock more XP.`);
+    }
+  };
+
+  const end = () =>
+    showDialog({
+      title: 'End this event?',
+      message: 'Everyone is paid XP for their progress so far, then the event is removed.',
+      icon: 'stop-circle-outline',
+      confirmText: 'End event',
+      cancelText: 'Cancel',
+      isDestructive: true,
+      onConfirm: async () => {
+        setBusy('end');
+        try {
+          await endCommunityEvent(e.id);
+          onClose();
+        } catch (err) {
+          Alert.alert('Could not end event', (err as Error)?.message || 'Please try again.');
+        } finally {
+          setBusy(null);
+        }
+      },
+    });
+
+  const renderTask = (t: EventTaskView, color: string, showProgress: boolean) => {
+    const cur = t.current ?? 0;
+    const pct = Math.min(100, Math.round((cur / t.target) * 100));
+    return (
+      <View key={t.id} style={styles.taskRow}>
+        <View style={[styles.taskIcon, { backgroundColor: t.done ? '#DCFCE7' : '#F1F5F9' }]}>
+          <Ionicons
+            name={(t.done ? 'checkmark' : t.icon) as keyof typeof Ionicons.glyphMap}
+            size={16}
+            color={t.done ? '#16A34A' : color}
+          />
+        </View>
+        <View style={{ flex: 1, gap: 4 }}>
+          <Text style={[styles.taskLabel, t.done && styles.taskDone]}>{t.label}</Text>
+          {showProgress ? (
+            <View style={styles.taskBarRow}>
+              <View style={styles.taskTrack}>
+                <View style={[styles.taskFill, { width: `${pct}%`, backgroundColor: t.done ? '#16A34A' : color }]} />
+              </View>
+              <Text style={styles.taskCount}>
+                {cur}/{t.target}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.taskHow}>{t.howMeasured}</Text>
+          )}
+        </View>
+      </View>
     );
   };
 
-  const handleCompleteSubmission = () => {
-    setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
-      const res = completeCommunityEvent(event.id);
-      if (res) {
-        Alert.alert(
-          'Challenge Completed',
-          `You earned +${res.earnedXP} XP for "${res.eventTitle}".${
-            res.bonusReward ? `\n\nBonus Perk: ${res.bonusReward}` : ''
-          }\n\nYour rank on the seasonal leaderboard has been updated.`
-        );
-      }
-    }, 600);
-  };
+  const renderTrackPreview = (role: 'Learner' | 'Mentor', track: EventTrackView | null) =>
+    track ? (
+      <View key={role} style={[styles.trackCard, { borderColor: role === 'Learner' ? '#DDD6FE' : '#99F6E4' }]}>
+        <View style={styles.trackHead}>
+          <Text style={[styles.trackRole, { color: TRACK_COLOR[role] }]}>{role === 'Learner' ? '🎓 Learners' : '✨ Mentors'}</Text>
+          <Text style={styles.trackName}>{track.name}</Text>
+          <View style={[styles.xpPill, { backgroundColor: TRACK_COLOR[role] }]}>
+            <Text style={styles.xpPillText}>{track.xp} XP</Text>
+          </View>
+        </View>
+        {track.tasks.map((t) => renderTask(t, TRACK_COLOR[role], false))}
+      </View>
+    ) : null;
+
+  const votedPct = Math.min(100, Math.round((e.votes.countedForStart / e.minVoters) * 100));
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={onClose}
-    >
-      <View style={[styles.container, { paddingTop: Math.max(insets.top, 12) }]}>
-        {/* Top App Bar */}
-        <View style={styles.topBar}>
-          <TouchableOpacity
-            activeOpacity={0.7}
-            onPress={onClose}
-            style={styles.backCircleBtn}
-          >
-            <Ionicons name="close" size={20} color="#0F172A" />
-          </TouchableOpacity>
-
-          <View style={styles.topBarTitleBlock}>
-            <Text style={styles.topBarSub}>CIRCLE EVENT & CHALLENGE</Text>
-            <Text style={styles.topBarTitle} numberOfLines={1}>
-              {event.communityName}
-            </Text>
-          </View>
-
-          <View style={{ width: 36 }} />
-        </View>
-
-        <ScrollView
-          contentContainerStyle={[
-            styles.scrollContent,
-            { paddingBottom: Math.max(insets.bottom + 40, 60) },
-          ]}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Hero Banner */}
-          <LinearGradient
-            colors={event.bannerGradient}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={[styles.heroGradient, shadows.glow]}
-          >
-            <View style={styles.heroBadgeRow}>
-              <View style={styles.categoryPill}>
-                <Ionicons
-                  name={event.icon as keyof typeof Ionicons.glyphMap}
-                  size={12}
-                  color="#FFFFFF"
-                />
-                <Text style={styles.categoryPillText}>
-                  {event.category.toUpperCase()} • FOR {event.targetRole.toUpperCase()}S
-                </Text>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={styles.overlay}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <LinearGradient colors={e.bannerGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
+            <View style={styles.heroTop}>
+              <View style={styles.pill}>
+                <Ionicons name={phase.icon} size={12} color="#FFFFFF" />
+                <Text style={styles.pillText}>{phase.text}</Text>
               </View>
-
-              <View style={styles.timerPill}>
-                <Ionicons name="time-outline" size={12} color="#FDE047" />
-                <Text style={styles.timerPillText}>{event.daysLeft}D LEFT</Text>
-              </View>
+              <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+                <Ionicons name="close" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
             </View>
-
-            <Text style={styles.eventTitle}>{event.title}</Text>
-            <Text style={styles.eventSubtitle}>{event.subtitle}</Text>
-
-            {/* Participants Bar */}
-            <View style={styles.participantsRow}>
-              <Ionicons name="people" size={15} color="#FFFFFF" />
-              <Text style={styles.participantsText}>
-                {event.participantsCount} Members Currently Competing
-              </Text>
-            </View>
+            <Text style={styles.heroTitle}>{e.title}</Text>
+            {!!e.description && <Text style={styles.heroDesc} numberOfLines={3}>{e.description}</Text>}
+            <Text style={styles.heroMeta}>by {e.createdByName} · {e.communityName}</Text>
           </LinearGradient>
 
-          {/* XP & Rewards Highlight Card */}
-          <View style={[styles.rewardPrizeCard, shadows.soft]}>
-            <View style={styles.prizeHeader}>
-              <View style={styles.prizeIconBox}>
-                <Ionicons name="trophy" size={20} color="#D97706" />
-              </View>
-              <View style={styles.prizeTitleCol}>
-                <Text style={styles.prizeCardTitle}>Event Reward Pool</Text>
-                <Text style={styles.prizeCardSub}>Earned upon verified completion</Text>
-              </View>
-              <View style={styles.xpBigPill}>
-                <Ionicons name="flash" size={14} color="#4F46E5" />
-                <Text style={styles.xpBigText}>+{event.xpReward} XP</Text>
-              </View>
-            </View>
-
-            {event.bonusReward && (
-              <View style={styles.bonusBox}>
-                <Ionicons name="sparkles" size={14} color="#CA8A04" />
-                <Text style={styles.bonusText}>
-                  <Text style={{ fontWeight: 'bold' }}>Bonus:</Text> {event.bonusReward}
+          <View style={styles.tabs}>
+            {(['challenge', 'board'] as const).map((t) => (
+              <TouchableOpacity key={t} onPress={() => setTab(t)} style={[styles.tab, tab === t && styles.tabActive]}>
+                <Ionicons name={t === 'challenge' ? 'flag' : 'podium'} size={14} color={tab === t ? '#4F46E5' : '#64748B'} />
+                <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
+                  {t === 'challenge' ? 'Challenge' : `Board (${e.votes.total})`}
                 </Text>
-              </View>
-            )}
+              </TouchableOpacity>
+            ))}
           </View>
 
-          {/* About Event */}
-          <View style={[styles.sectionCard, shadows.soft]}>
-            <Text style={styles.sectionHeaderTitle}>About This Challenge</Text>
-            <Text style={styles.descriptionText}>{event.description}</Text>
-          </View>
-
-          {/* Step-by-Step Requirements */}
-          <View style={[styles.sectionCard, shadows.soft]}>
-            <Text style={styles.sectionHeaderTitle}>Rules & Submission Checklist</Text>
-            <View style={styles.requirementsList}>
-              {event.requirements.map((req, idx) => (
-                <View key={idx} style={styles.reqItemRow}>
-                  <View style={styles.stepNumCircle}>
-                    <Text style={styles.stepNumText}>{idx + 1}</Text>
+          <ScrollView contentContainerStyle={styles.body}>
+            {tab === 'challenge' ? (
+              <>
+                {e.phase === 'voting' ? (
+                  <View style={styles.voteCard}>
+                    <Text style={styles.sectionTitle}>Who’s joining?</Text>
+                    <View style={styles.voteCounts}>
+                      <View style={styles.voteCell}>
+                        <Text style={styles.voteNum}>{e.votes.Learner}</Text>
+                        <Text style={styles.voteLabel}>Learners</Text>
+                      </View>
+                      <View style={styles.voteCell}>
+                        <Text style={styles.voteNum}>{e.votes.Mentor}</Text>
+                        <Text style={styles.voteLabel}>Mentors</Text>
+                      </View>
+                    </View>
+                    <View style={styles.taskTrack}>
+                      <View style={[styles.taskFill, { width: `${votedPct}%`, backgroundColor: votedPct >= 100 ? '#16A34A' : '#F59E0B' }]} />
+                    </View>
+                    <Text style={styles.voteHint}>
+                      {e.votes.countedForStart >= e.minVoters
+                        ? 'Enough members joined — it goes live when voting closes.'
+                        : `Needs ${e.minVoters - e.votes.countedForStart} more vote${e.minVoters - e.votes.countedForStart === 1 ? '' : 's'} to start. Only voters can play.`}
+                    </Text>
                   </View>
-                  <Text style={styles.reqItemText}>{req}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
+                ) : my ? (
+                  <View style={styles.myCard}>
+                    <View style={styles.myTop}>
+                      <View>
+                        <Text style={styles.myPct}>{my.pct}%</Text>
+                        <Text style={styles.myPctLabel}>
+                          {my.tasksDone}/{my.tasks.length} tasks done
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={styles.myXp}>
+                          {my.xpEarned}
+                          <Text style={styles.myXpMax}> / {my.maxXp} XP</Text>
+                        </Text>
+                        <Text style={styles.myPctLabel}>collected {my.xpAwarded}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.bigTrack}>
+                      <View style={[styles.bigFill, { width: `${my.pct}%` }]} />
+                    </View>
+                    {e.isCreator && <Text style={styles.creatorNote}>You created this event — progress counts, but it pays you no XP.</Text>}
+                  </View>
+                ) : (
+                  <View style={styles.noteBox}>
+                    <Ionicons name="lock-closed" size={15} color="#64748B" />
+                    <Text style={styles.noteText}>Voting is closed — only members who voted are playing. Watch the Board!</Text>
+                  </View>
+                )}
 
-          {/* Role Compatibility Alert */}
-          {!isRoleMatched && (
-            <View style={styles.roleMismatchBox}>
-              <Ionicons name="information-circle" size={18} color="#D97706" />
-              <Text style={styles.roleMismatchText}>
-                Note: This event is specifically designed for{' '}
-                <Text style={{ fontWeight: 'bold' }}>{event.targetRole}s</Text>. You are currently in{' '}
-                <Text style={{ fontWeight: 'bold' }}>{selectedRole || 'Learner'}</Text> mode. You can
-                still demo and submit!
-              </Text>
-            </View>
-          )}
+                {my && e.phase === 'live' && myTrack ? (
+                  <>
+                    <Text style={styles.sectionTitle}>Your {my.role} challenge · {myTrack.name}</Text>
+                    {my.tasks.map((t) => renderTask(t, TRACK_COLOR[my.role], true))}
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.sectionTitle}>Challenges</Text>
+                    {renderTrackPreview('Learner', e.tracks.Learner)}
+                    {renderTrackPreview('Mentor', e.tracks.Mentor)}
+                  </>
+                )}
 
-          {/* Interactive CTA Buttons */}
-          <View style={styles.actionBlock}>
-            {event.isCompleted ? (
-              <View style={styles.completedBanner}>
-                <Ionicons name="checkmark-circle" size={20} color="#10B981" />
-                <View>
-                  <Text style={styles.completedBannerTitle}>Challenge Completed!</Text>
-                  <Text style={styles.completedBannerSub}>
-                    +{event.xpReward} XP added to your seasonal balance
+                <View style={styles.xpRule}>
+                  <Ionicons name="pie-chart" size={14} color="#4F46E5" />
+                  <Text style={styles.xpRuleText}>
+                    XP is proportional: finish 10% of your tasks for 10% of the XP, 100% for the full reward. Anything you
+                    don’t collect is paid automatically when the event ends.
                   </Text>
                 </View>
-              </View>
-            ) : event.isJoined ? (
-              <TouchableOpacity
-                activeOpacity={0.88}
-                disabled={submitting}
-                onPress={handleCompleteSubmission}
-                style={[styles.primaryActionBtn, shadows.glow]}
-              >
-                <LinearGradient
-                  colors={event.bannerGradient}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={styles.primaryActionGradient}
-                >
-                  <Ionicons name="cloud-upload" size={18} color="#FFFFFF" />
-                  <Text style={styles.primaryActionText}>
-                    {submitting
-                      ? 'Validating Submission...'
-                      : event.targetRole === 'Mentor'
-                      ? `Complete Mentorship Task (+${event.xpReward} XP)`
-                      : `Submit Practice Clip (+${event.xpReward} XP)`}
-                  </Text>
-                </LinearGradient>
-              </TouchableOpacity>
+              </>
             ) : (
+              <>
+                {(detail?.board ?? []).length === 0 ? (
+                  <Text style={styles.emptyBoard}>{detail ? 'No one has joined yet.' : 'Loading…'}</Text>
+                ) : (
+                  detail!.board.map((r, i) => (
+                    <View key={r.userId} style={[styles.boardRow, r.isMe && styles.boardRowMe]}>
+                      <Text style={styles.boardRank}>{i + 1}</Text>
+                      <Avatar uri={r.avatarUrl} name={r.name} size={36} />
+                      <View style={{ flex: 1, gap: 4 }}>
+                        <View style={styles.boardNameRow}>
+                          <Text style={styles.boardName} numberOfLines={1}>
+                            {r.name}
+                            {r.isMe ? ' (you)' : ''}
+                          </Text>
+                          <Text style={[styles.boardRole, { color: TRACK_COLOR[r.role] }]}>{r.role}</Text>
+                        </View>
+                        <View style={styles.taskBarRow}>
+                          <View style={styles.taskTrack}>
+                            <View style={[styles.taskFill, { width: `${r.pct}%`, backgroundColor: r.pct >= 100 ? '#16A34A' : TRACK_COLOR[r.role] }]} />
+                          </View>
+                          <Text style={styles.taskCount}>{r.pct}%</Text>
+                        </View>
+                        <Text style={styles.boardMeta}>
+                          {r.tasksDone}/{r.tasksTotal} tasks{r.isCreator ? ' · creator (no XP)' : ` · ${r.xpAwarded} XP collected`}
+                        </Text>
+                      </View>
+                    </View>
+                  ))
+                )}
+              </>
+            )}
+          </ScrollView>
+
+          <View style={styles.actions}>
+            {e.phase === 'voting' ? (
+              e.hasVoted ? (
+                <TouchableOpacity disabled={!!busy} onPress={() => vote(false)} style={[styles.primary, styles.secondary]}>
+                  {busy === 'vote' ? <ActivityIndicator color="#7C3AED" /> : <Ionicons name="checkmark-circle" size={18} color="#7C3AED" />}
+                  <Text style={[styles.primaryText, { color: '#7C3AED' }]}>You’re in · tap to withdraw</Text>
+                </TouchableOpacity>
+              ) : e.myTrackAvailable ? (
+                <TouchableOpacity disabled={!!busy} onPress={() => vote(true)} style={[styles.primary, { backgroundColor: '#7C3AED' }]}>
+                  {busy === 'vote' ? <ActivityIndicator color="#FFFFFF" /> : <Ionicons name="hand-left" size={18} color="#FFFFFF" />}
+                  <Text style={styles.primaryText}>Vote to join as {e.myRole}</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={[styles.primary, styles.disabled]}>
+                  <Text style={[styles.primaryText, { color: '#64748B' }]}>No challenge for {e.myRole ?? 'your role'}s</Text>
+                </View>
+              )
+            ) : my && e.phase === 'live' ? (
               <TouchableOpacity
-                activeOpacity={0.88}
-                onPress={handleJoin}
-                style={[styles.primaryActionBtn, shadows.glow]}
+                disabled={!!busy || my.collectable <= 0}
+                onPress={collect}
+                style={[styles.primary, { backgroundColor: my.collectable > 0 ? '#16A34A' : '#CBD5E1' }]}
               >
-                <LinearGradient
-                  colors={['#4F46E5', '#7C3AED']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={styles.primaryActionGradient}
-                >
-                  <Ionicons name="flag" size={18} color="#FFFFFF" />
-                  <Text style={styles.primaryActionText}>
-                    Join Event (+{event.xpReward} XP Challenge)
-                  </Text>
-                </LinearGradient>
+                {busy === 'collect' ? <ActivityIndicator color="#FFFFFF" /> : <Ionicons name="gift" size={18} color="#FFFFFF" />}
+                <Text style={styles.primaryText}>
+                  {my.collectable > 0 ? `Collect +${my.collectable} XP` : my.pct >= 100 ? 'All XP collected 🎉' : `Keep going · ${my.pct}%`}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            {user?.isAdmin && (
+              <TouchableOpacity disabled={!!busy} onPress={end} style={styles.endBtn}>
+                <Ionicons name="stop-circle-outline" size={16} color="#DC2626" />
+                <Text style={styles.endText}>End event (admin)</Text>
               </TouchableOpacity>
             )}
           </View>
-        </ScrollView>
+        </View>
       </View>
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.base,
-    paddingVertical: spacing.sm,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  backCircleBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  topBarTitleBlock: {
-    alignItems: 'center',
-  },
-  topBarSub: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#D97706',
-    letterSpacing: 0.5,
-  },
-  topBarTitle: {
-    fontSize: 14,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-  },
-  scrollContent: {
-    padding: spacing.base,
-    gap: spacing.sm + 2,
-  },
-  heroGradient: {
-    borderRadius: borderRadius.xxl,
-    padding: spacing.lg,
-    position: 'relative',
-  },
-  heroBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  categoryPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: borderRadius.full,
-  },
-  categoryPillText: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    letterSpacing: 0.4,
-  },
-  timerPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.18)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: borderRadius.full,
-  },
-  timerPillText: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: '#FDE047',
-  },
-  eventTitle: {
-    fontSize: 19,
-    fontWeight: typography.weights.bold,
-    color: '#FFFFFF',
-    lineHeight: 25,
-    marginBottom: 4,
-  },
-  eventSubtitle: {
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.9)',
-    lineHeight: 17,
-    marginBottom: 12,
-  },
-  participantsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: borderRadius.lg,
-    alignSelf: 'flex-start',
-  },
-  participantsText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-  rewardPrizeCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: borderRadius.xl,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 10,
-  },
-  prizeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  prizeIconBox: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#FEF3C7',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  prizeTitleCol: {
-    flex: 1,
-    marginLeft: 10,
-  },
-  prizeCardTitle: {
-    fontSize: 13,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-  },
-  prizeCardSub: {
-    fontSize: 11,
-    color: '#64748B',
-  },
-  xpBigPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: borderRadius.full,
-    borderWidth: 1,
-    borderColor: '#C7D2FE',
-  },
-  xpBigText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#4F46E5',
-  },
-  bonusBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#FFFBEB',
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  bonusText: {
-    fontSize: 11,
-    color: '#92400E',
-    flex: 1,
-  },
-  sectionCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: borderRadius.xl,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 8,
-  },
-  sectionHeaderTitle: {
-    fontSize: 13,
-    fontWeight: typography.weights.bold,
-    color: '#0F172A',
-  },
-  descriptionText: {
-    fontSize: 13,
-    color: '#475569',
-    lineHeight: 19,
-  },
-  requirementsList: {
-    gap: 8,
-    marginTop: 2,
-  },
-  reqItemRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  stepNumCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#EEF2FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
-  },
-  stepNumText: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: '#4F46E5',
-  },
-  reqItemText: {
-    fontSize: 12,
-    color: '#334155',
-    flex: 1,
-    lineHeight: 18,
-  },
-  roleMismatchBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FEF3C7',
-    padding: 10,
-    borderRadius: borderRadius.lg,
-    gap: 8,
-  },
-  roleMismatchText: {
-    fontSize: 11,
-    color: '#92400E',
-    flex: 1,
-    lineHeight: 16,
-  },
-  actionBlock: {
-    marginTop: spacing.xs,
-  },
-  primaryActionBtn: {
-    borderRadius: borderRadius.xl,
-    overflow: 'hidden',
-  },
-  primaryActionGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    gap: 8,
-  },
-  primaryActionText: {
-    fontSize: 14,
-    fontWeight: typography.weights.bold,
-    color: '#FFFFFF',
-  },
-  completedBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#DCFCE7',
-    padding: spacing.md,
-    borderRadius: borderRadius.xl,
-    gap: 10,
-    borderWidth: 1,
-    borderColor: '#BBF7D0',
-  },
-  completedBannerTitle: {
-    fontSize: 13,
-    fontWeight: typography.weights.bold,
-    color: '#15803D',
-  },
-  completedBannerSub: {
-    fontSize: 11,
-    color: '#166534',
-  },
+  overlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.6)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 26, borderTopRightRadius: 26, maxHeight: '94%', overflow: 'hidden' },
+  hero: { padding: spacing.base, gap: 6 },
+  heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(15,23,42,0.3)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
+  pillText: { fontSize: 11, fontWeight: '800', color: '#FFFFFF' },
+  closeBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(15,23,42,0.3)', alignItems: 'center', justifyContent: 'center' },
+  heroTitle: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', marginTop: 4 },
+  heroDesc: { fontSize: 13, color: 'rgba(255,255,255,0.92)', lineHeight: 18 },
+  heroMeta: { fontSize: 11, color: 'rgba(255,255,255,0.75)', fontWeight: '600' },
+
+  tabs: { flexDirection: 'row', margin: 12, backgroundColor: '#F1F5F9', borderRadius: 14, padding: 3 },
+  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 8, borderRadius: 11 },
+  tabActive: { backgroundColor: '#FFFFFF' },
+  tabText: { fontSize: 12, fontWeight: '700', color: '#64748B' },
+  tabTextActive: { color: '#4F46E5', fontWeight: '800' },
+
+  body: { paddingHorizontal: spacing.base, paddingBottom: 16, gap: 10 },
+  sectionTitle: { fontSize: 14, fontWeight: '800', color: '#0F172A', marginTop: 4 },
+
+  voteCard: { backgroundColor: '#FFFBEB', borderRadius: 16, borderWidth: 1, borderColor: '#FDE68A', padding: 12, gap: 8 },
+  voteCounts: { flexDirection: 'row', gap: 10 },
+  voteCell: { flex: 1, backgroundColor: '#FFFFFF', borderRadius: 12, paddingVertical: 8, alignItems: 'center' },
+  voteNum: { fontSize: 22, fontWeight: '800', color: '#0F172A' },
+  voteLabel: { fontSize: 11, color: '#64748B', fontWeight: '600' },
+  voteHint: { fontSize: 12, color: '#92400E', lineHeight: 17 },
+
+  myCard: { backgroundColor: '#EEF2FF', borderRadius: 16, padding: 14, gap: 10 },
+  myTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+  myPct: { fontSize: 34, fontWeight: '800', color: '#312E81' },
+  myPctLabel: { fontSize: 12, color: '#4338CA', fontWeight: '600' },
+  myXp: { fontSize: 22, fontWeight: '800', color: '#16A34A' },
+  myXpMax: { fontSize: 13, color: '#4338CA', fontWeight: '700' },
+  bigTrack: { height: 12, borderRadius: 6, backgroundColor: 'rgba(79,70,229,0.15)', overflow: 'hidden' },
+  bigFill: { height: '100%', borderRadius: 6, backgroundColor: '#4F46E5' },
+  creatorNote: { fontSize: 11, color: '#B45309', fontWeight: '600' },
+
+  noteBox: { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: '#F1F5F9', borderRadius: 12, padding: 10 },
+  noteText: { flex: 1, fontSize: 12, color: '#475569' },
+
+  trackCard: { borderWidth: 1.5, borderRadius: 16, padding: 12, gap: 6 },
+  trackHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
+  trackRole: { fontSize: 12, fontWeight: '800' },
+  trackName: { flex: 1, fontSize: 14, fontWeight: '800', color: '#0F172A' },
+  xpPill: { paddingHorizontal: 9, paddingVertical: 3, borderRadius: 999 },
+  xpPillText: { fontSize: 11, fontWeight: '800', color: '#FFFFFF' },
+
+  taskRow: { flexDirection: 'row', gap: 10, alignItems: 'center', paddingVertical: 4 },
+  taskIcon: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  taskLabel: { fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  taskDone: { color: '#16A34A' },
+  taskHow: { fontSize: 11, color: '#64748B' },
+  taskBarRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  taskTrack: { flex: 1, height: 7, borderRadius: 4, backgroundColor: '#E2E8F0', overflow: 'hidden' },
+  taskFill: { height: '100%', borderRadius: 4 },
+  taskCount: { fontSize: 11, fontWeight: '800', color: '#334155', minWidth: 34, textAlign: 'right' },
+
+  xpRule: { flexDirection: 'row', gap: 8, backgroundColor: '#F8FAFC', borderRadius: 12, padding: 10, marginTop: 4 },
+  xpRuleText: { flex: 1, fontSize: 11, color: '#475569', lineHeight: 16 },
+
+  emptyBoard: { textAlign: 'center', color: '#94A3B8', paddingVertical: 24 },
+  boardRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10, borderRadius: 14, borderWidth: 1, borderColor: '#EEF2F7' },
+  boardRowMe: { borderColor: '#A5B4FC', backgroundColor: '#EEF2FF' },
+  boardRank: { width: 18, fontSize: 13, fontWeight: '800', color: '#94A3B8', textAlign: 'center' },
+  boardNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  boardName: { flex: 1, fontSize: 13, fontWeight: '800', color: '#0F172A' },
+  boardRole: { fontSize: 10, fontWeight: '800' },
+  boardMeta: { fontSize: 10, color: '#64748B' },
+
+  actions: { paddingHorizontal: spacing.base, paddingTop: 8, gap: 6, borderTopWidth: 1, borderTopColor: '#F1F5F9' },
+  primary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, borderRadius: 999 },
+  secondary: { backgroundColor: '#F5F3FF', borderWidth: 1.5, borderColor: '#C4B5FD' },
+  disabled: { backgroundColor: '#F1F5F9' },
+  primaryText: { fontSize: 15, fontWeight: '800', color: '#FFFFFF' },
+  endBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8 },
+  endText: { fontSize: 13, fontWeight: '700', color: '#DC2626' },
 });

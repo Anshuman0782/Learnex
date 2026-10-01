@@ -1,11 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -14,8 +14,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { AuthStackParamList } from '../../navigation/types';
 import { useApp } from '../../context/AppContext';
 import { Header, Button } from '../../components/common';
-import { getRandomMentorQuestions } from '../../data/mentorQuizData';
-import { MentorQuestion } from '../../types';
+import {
+  getMentorQuizRequest,
+  submitMentorQuizRequest,
+  type QuizQuestion,
+  type QuizResultResponse,
+} from '../../api/onboarding.api';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'MentorQuiz'>;
@@ -23,93 +27,158 @@ type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'MentorQuiz'
 export const MentorQuizScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NavigationProp>();
-  const { setRole, selectedHobby } = useApp();
+  const { enrollAsLearner, applyMentorSession, showDialog } = useApp();
 
-  // Pick 5 random questions for this assessment session
-  const [questions, setQuestions] = useState<MentorQuestion[]>(() =>
-    getRandomMentorQuestions(selectedHobby, 5)
-  );
+  const [questions, setQuestions] = useState<QuizQuestion[]>([]);
+  const [passMark, setPassMark] = useState(4);
+  const [loadingQuiz, setLoadingQuiz] = useState(true);
+  const [quizError, setQuizError] = useState<string | null>(null);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedAnswers, setSelectedAnswers] = useState<Record<number, number>>({});
-  const [isCompleted, setIsCompleted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<QuizResultResponse | null>(null);
+  const [entering, setEntering] = useState(false);
   const [showReview, setShowReview] = useState(false);
 
   const currentQuestion = questions[currentIndex];
   const selectedOptionIndex = selectedAnswers[currentIndex];
   const isLastQuestion = currentIndex === questions.length - 1;
 
-  // Calculate score
-  const score = useMemo(() => {
-    let count = 0;
-    questions.forEach((q, idx) => {
-      if (selectedAnswers[idx] === q.correctIndex) {
-        count += 1;
-      }
-    });
-    return count;
-  }, [questions, selectedAnswers]);
+  // Fetch a fresh quiz (no answer key) from the backend.
+  const loadQuiz = useCallback(async () => {
+    setLoadingQuiz(true);
+    setQuizError(null);
+    try {
+      const data = await getMentorQuizRequest();
+      setQuestions(data.questions);
+      setPassMark(data.passMark);
+      setCurrentIndex(0);
+      setSelectedAnswers({});
+      setResult(null);
+      setShowReview(false);
+    } catch (err: any) {
+      setQuizError(
+        err?.message || 'Could not load the assessment. Check your connection and try again.'
+      );
+    } finally {
+      setLoadingQuiz(false);
+    }
+  }, []);
 
-  const hasPassed = score >= 4; // Requirement: 4 out of 5 to qualify as Mentor
+  useEffect(() => {
+    loadQuiz();
+  }, [loadQuiz]);
 
   const handleSelectOption = (optionIndex: number) => {
-    setSelectedAnswers((prev) => ({
-      ...prev,
-      [currentIndex]: optionIndex,
-    }));
+    setSelectedAnswers((prev) => ({ ...prev, [currentIndex]: optionIndex }));
+  };
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    try {
+      const answers = questions.map((q, idx) => ({
+        questionId: q.id,
+        selectedIndex: selectedAnswers[idx],
+      }));
+      const res = await submitMentorQuizRequest(answers);
+      // On a pass the backend granted Mentor + returned a fresh session.
+      if (res.passed && res.session) {
+        await applyMentorSession(res.session);
+      }
+      setResult(res);
+    } catch (err: any) {
+      showDialog({
+        title: 'Submission Failed',
+        message:
+          err?.message || 'We couldn’t grade your assessment. Please try again.',
+        icon: 'alert-circle-outline',
+        confirmText: 'Try Again',
+      });
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleNext = () => {
     if (selectedOptionIndex === undefined) {
-      Alert.alert('Select an Answer', 'Please choose an option before proceeding.');
+      showDialog({
+        title: 'Select an Answer',
+        message: 'Please choose an option before proceeding.',
+        icon: 'help-circle-outline',
+        confirmText: 'Got it',
+      });
       return;
     }
-
     if (!isLastQuestion) {
       setCurrentIndex((prev) => prev + 1);
     } else {
-      // Final submission
-      const finalScore = questions.reduce(
-        (acc, q, idx) => (selectedAnswers[idx] === q.correctIndex ? acc + 1 : acc),
-        0
-      );
-      const passed = finalScore >= 4;
-
-      if (passed) {
-        setRole('Mentor');
-      } else {
-        setRole('Learner');
-      }
-
-      setIsCompleted(true);
+      handleSubmit();
     }
   };
 
   const handlePrevious = () => {
-    if (currentIndex > 0) {
-      setCurrentIndex((prev) => prev - 1);
-    }
+    if (currentIndex > 0) setCurrentIndex((prev) => prev - 1);
   };
 
-  const handleFinishAndEnterApp = () => {
+  const enterApp = () => {
     navigation.reset({
       index: 0,
       routes: [{ name: 'Main', params: { screen: 'HomeTab' } }],
     });
   };
 
-  const handleRetake = () => {
-    setQuestions(getRandomMentorQuestions(selectedHobby, 5));
-    setCurrentIndex(0);
-    setSelectedAnswers({});
-    setIsCompleted(false);
-    setShowReview(false);
+  // Fail path: the learner can still join directly.
+  const handleContinueAsLearner = async () => {
+    setEntering(true);
+    try {
+      await enrollAsLearner();
+      enterApp();
+    } catch (err: any) {
+      showDialog({
+        title: 'Something went wrong',
+        message: err?.message || 'Please check your connection and try again.',
+        icon: 'alert-circle-outline',
+        confirmText: 'Try Again',
+      });
+    } finally {
+      setEntering(false);
+    }
   };
 
-  const progressPercent = ((currentIndex + 1) / questions.length) * 100;
+  const questionById = (id: string) => questions.find((q) => q.id === id);
+  const progressPercent = questions.length
+    ? ((currentIndex + 1) / questions.length) * 100
+    : 0;
+
+  // =================== LOADING / ERROR ===================
+  if (loadingQuiz || quizError) {
+    return (
+      <View style={styles.container}>
+        <View style={{ paddingTop: Math.max(insets.top, 10), backgroundColor: '#FFFFFF' }}>
+          <Header title="Mentor Qualification" onBack={() => navigation.goBack()} />
+        </View>
+        <View style={styles.centerFill}>
+          {loadingQuiz ? (
+            <>
+              <ActivityIndicator size="large" color={colors.primary} />
+              <Text style={styles.centerText}>Preparing your assessment…</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name="cloud-offline-outline" size={44} color="#94A3B8" />
+              <Text style={styles.centerText}>{quizError}</Text>
+              <Button title="Retry" onPress={loadQuiz} size="md" style={{ marginTop: spacing.md }} />
+            </>
+          )}
+        </View>
+      </View>
+    );
+  }
 
   // =================== RESULT VIEW ===================
-  if (isCompleted) {
+  if (result) {
+    const hasPassed = result.passed;
     return (
       <View style={styles.container}>
         <View style={{ paddingTop: Math.max(insets.top, 12), backgroundColor: '#FFFFFF' }}>
@@ -126,7 +195,6 @@ export const MentorQuizScreen: React.FC = () => {
           ]}
           showsVerticalScrollIndicator={false}
         >
-          {/* Result Card */}
           <View
             style={[
               styles.resultCard,
@@ -159,57 +227,58 @@ export const MentorQuizScreen: React.FC = () => {
                   { color: hasPassed ? '#166534' : '#B45309' },
                 ]}
               >
-                {hasPassed ? 'QUALIFIED AS MENTOR 🎉' : 'ASSIGNED AS LEARNER 💡'}
+                {hasPassed ? 'QUALIFIED AS MENTOR 🎉' : 'NOT QUITE THERE YET 💡'}
               </Text>
             </View>
 
             <Text style={styles.resultTitle}>
-              {hasPassed ? 'Mentor Certified!' : 'Welcome to LERNEX!'}
+              {hasPassed ? 'Mentor Certified!' : 'Almost there!'}
             </Text>
 
             <View style={styles.scorePill}>
               <Text style={styles.scoreText}>
-                Score: <Text style={styles.scoreNumber}>{score}</Text> / {questions.length} Correct
+                Score: <Text style={styles.scoreNumber}>{result.score}</Text> / {result.total} Correct
               </Text>
             </View>
 
             <Text style={styles.resultDescription}>
               {hasPassed
-                ? 'Outstanding performance! You met the 4/5 qualification criteria and unlocked full Mentor privileges including video critiques and community guidance.'
-                : 'You scored under 4/5 required for Mentor qualification. You have been automatically registered as a Learner so you can practice, receive mentor feedback, and level up!'}
+                ? `Outstanding! You met the ${result.passMark}/${result.total} qualification criteria and unlocked full Mentor privileges including video critiques and community guidance.`
+                : `You scored under ${result.passMark}/${result.total} required for Mentor qualification. You can retake the test, or join as a Learner to practice, receive mentor feedback, and level up.`}
             </Text>
 
-            {/* Role Assignment Chip */}
-            <View style={styles.assignedRoleChip}>
-              <Ionicons
-                name={hasPassed ? 'ribbon' : 'person'}
-                size={18}
-                color={hasPassed ? '#7C3AED' : colors.primary}
-              />
-              <Text style={styles.assignedRoleText}>
-                Active Role: <Text style={{ fontWeight: 'bold' }}>{hasPassed ? 'Mentor' : 'Learner'}</Text>
-              </Text>
-            </View>
+            {hasPassed && (
+              <View style={styles.assignedRoleChip}>
+                <Ionicons name="ribbon" size={18} color="#7C3AED" />
+                <Text style={styles.assignedRoleText}>
+                  Active Role: <Text style={{ fontWeight: 'bold' }}>Mentor</Text>
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* Action Buttons */}
           <View style={styles.actionButtonsContainer}>
-            <Button
-              title={hasPassed ? 'Enter App as Mentor 🚀' : 'Continue as Learner 🎓'}
-              onPress={handleFinishAndEnterApp}
-              fullWidth
-              size="lg"
-            />
-
-            {!hasPassed && (
-              <Button
-                title="Retake 5-Question Test 🔄"
-                onPress={handleRetake}
-                variant="outline"
-                fullWidth
-                size="md"
-                style={{ marginTop: spacing.sm }}
-              />
+            {hasPassed ? (
+              <Button title="Enter App as Mentor 🚀" onPress={enterApp} fullWidth size="lg" />
+            ) : (
+              <>
+                <Button
+                  title="Continue as Learner 🎓"
+                  onPress={handleContinueAsLearner}
+                  loading={entering}
+                  fullWidth
+                  size="lg"
+                />
+                <Button
+                  title="Retake 5-Question Test 🔄"
+                  onPress={loadQuiz}
+                  variant="outline"
+                  fullWidth
+                  size="md"
+                  style={{ marginTop: spacing.sm }}
+                />
+              </>
             )}
 
             <TouchableOpacity
@@ -228,26 +297,26 @@ export const MentorQuizScreen: React.FC = () => {
             </TouchableOpacity>
           </View>
 
-          {/* Review breakdown accordion */}
+          {/* Review breakdown accordion — uses server-graded results */}
           {showReview && (
             <View style={styles.reviewList}>
               <Text style={styles.reviewHeaderTitle}>Assessment Review</Text>
-              {questions.map((q, qIndex) => {
-                const isCorrect = selectedAnswers[qIndex] === q.correctIndex;
-                const userChoice = selectedAnswers[qIndex];
+              {result.results.map((r, qIndex) => {
+                const q = questionById(r.questionId);
+                if (!q) return null;
                 return (
-                  <View key={q.id} style={styles.reviewItemCard}>
+                  <View key={r.questionId} style={styles.reviewItemCard}>
                     <View style={styles.reviewItemHeader}>
                       <View
                         style={[
                           styles.statusIndicator,
-                          { backgroundColor: isCorrect ? '#DCFCE7' : '#FEE2E2' },
+                          { backgroundColor: r.isCorrect ? '#DCFCE7' : '#FEE2E2' },
                         ]}
                       >
                         <Ionicons
-                          name={isCorrect ? 'checkmark' : 'close'}
+                          name={r.isCorrect ? 'checkmark' : 'close'}
                           size={14}
-                          color={isCorrect ? '#166534' : '#DC2626'}
+                          color={r.isCorrect ? '#166534' : '#DC2626'}
                         />
                       </View>
                       <Text style={styles.reviewItemQuestionText}>
@@ -260,24 +329,24 @@ export const MentorQuizScreen: React.FC = () => {
                         Your answer:{' '}
                         <Text
                           style={{
-                            color: isCorrect ? '#166534' : '#DC2626',
+                            color: r.isCorrect ? '#166534' : '#DC2626',
                             fontWeight: '600',
                           }}
                         >
-                          {userChoice !== undefined ? q.options[userChoice] : 'Not answered'}
+                          {r.selectedIndex !== undefined
+                            ? q.options[r.selectedIndex]
+                            : 'Not answered'}
                         </Text>
                       </Text>
-                      {!isCorrect && (
+                      {!r.isCorrect && (
                         <Text style={styles.reviewCorrectAnswer}>
                           Correct:{' '}
                           <Text style={{ color: '#166534', fontWeight: '600' }}>
-                            {q.options[q.correctIndex]}
+                            {q.options[r.correctIndex]}
                           </Text>
                         </Text>
                       )}
-                      <Text style={styles.reviewExplanation}>
-                        💡 {q.explanation}
-                      </Text>
+                      <Text style={styles.reviewExplanation}>💡 {r.explanation}</Text>
                     </View>
                   </View>
                 );
@@ -292,15 +361,10 @@ export const MentorQuizScreen: React.FC = () => {
   // =================== QUIZ QUESTIONS VIEW ===================
   return (
     <View style={styles.container}>
-      {/* Top Header */}
       <View style={{ paddingTop: Math.max(insets.top, 10), backgroundColor: '#FFFFFF' }}>
-        <Header
-          title="Mentor Qualification"
-          onBack={() => navigation.goBack()}
-        />
+        <Header title="Mentor Qualification" onBack={() => navigation.goBack()} />
       </View>
 
-      {/* Progress Bar Header */}
       <View style={styles.progressBarSection}>
         <View style={styles.progressTextRow}>
           <Text style={styles.progressStepText}>
@@ -308,11 +372,12 @@ export const MentorQuizScreen: React.FC = () => {
           </Text>
           <View style={styles.criteriaBadge}>
             <Ionicons name="shield-checkmark" size={12} color="#7C3AED" />
-            <Text style={styles.criteriaBadgeText}>Pass: 4/5 Correct</Text>
+            <Text style={styles.criteriaBadgeText}>
+              Pass: {passMark}/{questions.length} Correct
+            </Text>
           </View>
         </View>
 
-        {/* Progress Bar */}
         <View style={styles.progressBarTrack}>
           <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
         </View>
@@ -325,7 +390,6 @@ export const MentorQuizScreen: React.FC = () => {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Category Pill */}
         <View style={styles.categoryPillRow}>
           <View style={styles.categoryPill}>
             <Ionicons name="sparkles" size={12} color={colors.primary} />
@@ -335,16 +399,14 @@ export const MentorQuizScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* Question Box */}
         <View style={[styles.questionCard, shadows.soft]}>
           <Text style={styles.questionText}>{currentQuestion.question}</Text>
         </View>
 
-        {/* Options List */}
         <View style={styles.optionsList}>
           {currentQuestion.options.map((option, optIdx) => {
             const isSelected = selectedOptionIndex === optIdx;
-            const letter = String.fromCharCode(65 + optIdx); // A, B, C, D
+            const letter = String.fromCharCode(65 + optIdx);
 
             return (
               <TouchableOpacity
@@ -373,21 +435,11 @@ export const MentorQuizScreen: React.FC = () => {
                   </Text>
                 </View>
 
-                <Text
-                  style={[
-                    styles.optionText,
-                    isSelected && styles.optionTextSelected,
-                  ]}
-                >
+                <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>
                   {option}
                 </Text>
 
-                <View
-                  style={[
-                    styles.radioCircle,
-                    isSelected && styles.radioCircleSelected,
-                  ]}
-                >
+                <View style={[styles.radioCircle, isSelected && styles.radioCircleSelected]}>
                   {isSelected && <View style={styles.radioDot} />}
                 </View>
               </TouchableOpacity>
@@ -396,13 +448,7 @@ export const MentorQuizScreen: React.FC = () => {
         </View>
       </ScrollView>
 
-      {/* Bottom Action Footer */}
-      <View
-        style={[
-          styles.bottomBar,
-          { paddingBottom: Math.max(insets.bottom + 8, 16) },
-        ]}
-      >
+      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom + 8, 16) }]}>
         <View style={styles.bottomButtonsRow}>
           {currentIndex > 0 && (
             <TouchableOpacity
@@ -418,6 +464,7 @@ export const MentorQuizScreen: React.FC = () => {
             <Button
               title={isLastQuestion ? 'Submit Assessment' : 'Next Question →'}
               onPress={handleNext}
+              loading={submitting}
               disabled={selectedOptionIndex === undefined}
               fullWidth
               size="lg"
@@ -433,6 +480,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
+  },
+  centerFill: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  centerText: {
+    fontSize: typography.sizes.sm,
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: spacing.md,
+    lineHeight: 20,
   },
   progressBarSection: {
     backgroundColor: '#FFFFFF',

@@ -14,6 +14,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../../context/AppContext';
+import { pickVideo, recordVideo, generateVideoThumbnail } from '../../services/imagePicker';
+import { uploadFileRequest } from '../../api/media.api';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 import { Community } from '../../types';
 
@@ -23,36 +25,11 @@ interface CreatePostModalProps {
   community?: Community | null;
 }
 
-const SAMPLE_CLIPS = [
-  {
-    id: 'clip-1',
-    title: 'Adele - Easy On Me (Chorus Take)',
-    duration: '0:48',
-    thumbnail: 'https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=600&auto=format&fit=crop&q=80',
-    category: 'Vocal',
-  },
-  {
-    id: 'clip-2',
-    title: 'Guitar Solo Speed Run (120 BPM)',
-    duration: '0:35',
-    thumbnail: 'https://images.unsplash.com/photo-1510915361894-db8b60106cb1?w=600&auto=format&fit=crop&q=80',
-    category: 'Guitar',
-  },
-  {
-    id: 'clip-3',
-    title: 'Beat Mixing & Sidechain Compression',
-    duration: '1:10',
-    thumbnail: 'https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=600&auto=format&fit=crop&q=80',
-    category: 'Production',
-  },
-  {
-    id: 'clip-4',
-    title: 'React Native Micro-Interactions',
-    duration: '0:50',
-    thumbnail: 'https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=600&auto=format&fit=crop&q=80',
-    category: 'Coding',
-  },
-];
+const formatDuration = (ms?: number): string => {
+  if (!ms) return '';
+  const s = Math.round(ms / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
 
 const QUICK_TAGS = [
   { label: '#VocalPitch', icon: 'mic' },
@@ -77,11 +54,22 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [content, setContent] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>(['#VocalPitch']);
-  const [selectedClipIndex, setSelectedClipIndex] = useState(0);
   const [requestMentorCritique, setRequestMentorCritique] = useState(true);
   const [isPublishing, setIsPublishing] = useState(false);
 
-  const currentClip = SAMPLE_CLIPS[selectedClipIndex];
+  // Real picked video state.
+  const [videoUri, setVideoUri] = useState<string | null>(null);
+  const [videoMime, setVideoMime] = useState<string>('video/mp4');
+  const [videoThumbUri, setVideoThumbUri] = useState<string | null>(null);
+  const [videoDurationStr, setVideoDurationStr] = useState<string>('');
+
+  const resetForm = () => {
+    setTitle('');
+    setContent('');
+    setVideoUri(null);
+    setVideoThumbUri(null);
+    setVideoDurationStr('');
+  };
 
   const handleToggleTag = (tagItem: string) => {
     setSelectedTags((prev) =>
@@ -89,40 +77,64 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     );
   };
 
-  const handleQuickAction = (actionName: string) => {
-    showDialog({
-      title: actionName,
-      message: `Hardware recording simulation: Selected "${currentClip.title}"`,
-      icon: 'videocam-outline',
-      confirmText: 'OK',
-    });
+  const handlePickVideo = async (mode: 'record' | 'library') => {
+    const res = mode === 'record' ? await recordVideo() : await pickVideo();
+    if (res.status === 'denied') {
+      showDialog({
+        title: mode === 'record' ? 'Camera Access Needed' : 'Media Access Needed',
+        message: 'Please allow access for LERNEX in your device settings and try again.',
+        icon: 'videocam-outline',
+        confirmText: 'Got it',
+      });
+      return;
+    }
+    if (res.status !== 'ok') return;
+
+    setVideoUri(res.uri);
+    setVideoMime(res.mimeType);
+    setVideoDurationStr(formatDuration(res.durationMs));
+    // Best-effort poster frame (copied to persistent storage so it stays readable).
+    setVideoThumbUri(await generateVideoThumbnail(res.uri));
   };
 
-  const handleSubmit = () => {
-    if (!title.trim()) {
+  const handleSubmit = async () => {
+    if (postType === 'video' && !videoUri) {
       showDialog({
-        title: 'Title Required',
-        message: 'Please enter a title for your post.',
-        icon: 'alert-circle-outline',
+        title: 'Add a Video',
+        message: 'Record or upload a practice video before publishing.',
+        icon: 'videocam-outline',
         confirmText: 'OK',
       });
       return;
     }
-
+    if (!title.trim()) {
+      showDialog({ title: 'Title Required', message: 'Please enter a title for your post.', icon: 'alert-circle-outline', confirmText: 'OK' });
+      return;
+    }
     if (!content.trim()) {
-      showDialog({
-        title: 'Description Required',
-        message: 'Please describe what you want feedback on.',
-        icon: 'alert-circle-outline',
-        confirmText: 'OK',
-      });
+      showDialog({ title: 'Description Required', message: 'Please describe what you want feedback on.', icon: 'alert-circle-outline', confirmText: 'OK' });
       return;
     }
 
     setIsPublishing(true);
+    try {
+      let videoUrl: string | undefined;
+      let videoThumbnail: string | undefined;
 
-    setTimeout(() => {
-      createPost({
+      if (postType === 'video' && videoUri) {
+        const uploadedVideo = await uploadFileRequest(videoUri, videoMime);
+        videoUrl = uploadedVideo.url;
+        if (videoThumbUri) {
+          try {
+            const uploadedThumb = await uploadFileRequest(videoThumbUri, 'image/jpeg');
+            videoThumbnail = uploadedThumb.url;
+          } catch {
+            // Thumbnail is optional — the video still posts.
+          }
+        }
+      }
+
+      await createPost({
         title: title.trim(),
         communityId: community?.id,
         communityIds: community ? [community.id] : [],
@@ -130,26 +142,33 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         tag: selectedTags.join(' ') || '#PracticeVideo',
         tags: selectedTags,
         postType,
-        videoThumbnail: postType === 'video' ? currentClip.thumbnail : undefined,
-        videoDuration: postType === 'video' ? currentClip.duration : undefined,
+        videoUrl,
+        videoThumbnail,
+        videoDuration: postType === 'video' ? videoDurationStr || undefined : undefined,
         isPrivate,
         focusArea: selectedTags.map((t) => t.replace('#', '')).join(', '),
       });
 
-      setIsPublishing(false);
-      setTitle('');
-      setContent('');
+      resetForm();
       onClose();
-
       showDialog({
         title: isPrivate ? 'Shared to Circle Only 🔒' : 'Post Shared to Feed! 🎉',
         message: isPrivate
-          ? `Visible strictly inside ${community?.name || 'this circle'}. It will NEVER be shown on the public Reels feed.`
-          : `Shared live with ${community?.name || 'the community'} and added to public feeds!`,
+          ? `Visible strictly inside ${community?.name || 'this circle'}. It will NEVER be shown on the public feed.`
+          : `Shared live with ${community?.name || 'the community'}!`,
         icon: isPrivate ? 'lock-closed-outline' : 'rocket-outline',
         confirmText: 'Awesome',
       });
-    }, 400);
+    } catch (err: any) {
+      showDialog({
+        title: 'Upload Failed',
+        message: err?.message || 'Could not publish your video. Please check your connection and try again.',
+        icon: 'alert-circle-outline',
+        confirmText: 'Try Again',
+      });
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
   return (
@@ -251,12 +270,12 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               </TouchableOpacity>
             </View>
 
-            {/* Quick Action Dock */}
+            {/* Quick Action Dock — real capture */}
             {postType === 'video' && (
               <View style={styles.quickActionsDeck}>
                 <TouchableOpacity
                   activeOpacity={0.8}
-                  onPress={() => handleQuickAction('Camera Record')}
+                  onPress={() => handlePickVideo('record')}
                   style={styles.quickTile}
                 >
                   <LinearGradient colors={['#F43F5E', '#E11D48']} style={styles.quickTileCircle}>
@@ -267,7 +286,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
                 <TouchableOpacity
                   activeOpacity={0.8}
-                  onPress={() => handleQuickAction('Camera Roll Gallery')}
+                  onPress={() => handlePickVideo('library')}
                   style={styles.quickTile}
                 >
                   <LinearGradient colors={['#6366F1', '#4F46E5']} style={styles.quickTileCircle}>
@@ -275,112 +294,81 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                   </LinearGradient>
                   <Text style={styles.quickTileLabel}>Gallery</Text>
                 </TouchableOpacity>
-
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => handleQuickAction('Voice Note')}
-                  style={styles.quickTile}
-                >
-                  <LinearGradient colors={['#10B981', '#059669']} style={styles.quickTileCircle}>
-                    <Ionicons name="mic" size={17} color="#FFFFFF" />
-                  </LinearGradient>
-                  <Text style={styles.quickTileLabel}>Voice</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onPress={() => handleQuickAction('Sample Clip')}
-                  style={styles.quickTile}
-                >
-                  <LinearGradient colors={['#F59E0B', '#D97706']} style={styles.quickTileCircle}>
-                    <Ionicons name="flash" size={16} color="#FFFFFF" />
-                  </LinearGradient>
-                  <Text style={styles.quickTileLabel}>Sample</Text>
-                </TouchableOpacity>
               </View>
             )}
 
-            {/* Cinema Video Preview Card */}
+            {/* Real Video Picker / Preview */}
             {postType === 'video' && (
               <View style={[styles.cinemaCard, shadows.soft]}>
-                <View style={styles.cinemaMediaContainer}>
-                  <Image source={{ uri: currentClip.thumbnail }} style={styles.cinemaImage} />
-
-                  <LinearGradient
-                    colors={['rgba(15, 23, 42, 0.45)', 'transparent', 'rgba(15, 23, 42, 0.9)']}
-                    style={styles.cinemaOverlay}
-                  >
-                    <View style={styles.cinemaTopRow}>
-                      <View style={styles.cinemaCategoryBadge}>
-                        <Text style={styles.cinemaCategoryText}>{currentClip.category}</Text>
+                {videoUri ? (
+                  <View style={styles.cinemaMediaContainer}>
+                    {videoThumbUri ? (
+                      <Image source={{ uri: videoThumbUri }} style={styles.cinemaImage} />
+                    ) : (
+                      <View style={[styles.cinemaImage, styles.thumbFallback]}>
+                        <Ionicons name="videocam" size={40} color="#94A3B8" />
                       </View>
-                      <View style={styles.durationPill}>
-                        <Ionicons name="time-outline" size={11} color="#FFFFFF" />
-                        <Text style={styles.durationText}>{currentClip.duration}</Text>
+                    )}
+                    <LinearGradient
+                      colors={['rgba(15, 23, 42, 0.4)', 'transparent', 'rgba(15, 23, 42, 0.85)']}
+                      style={styles.cinemaOverlay}
+                    >
+                      <View style={styles.cinemaTopRow}>
+                        <View style={styles.cinemaCategoryBadge}>
+                          <Ionicons name="checkmark-circle" size={11} color="#FFFFFF" />
+                          <Text style={styles.cinemaCategoryText}> Video ready</Text>
+                        </View>
+                        {videoDurationStr ? (
+                          <View style={styles.durationPill}>
+                            <Ionicons name="time-outline" size={11} color="#FFFFFF" />
+                            <Text style={styles.durationText}>{videoDurationStr}</Text>
+                          </View>
+                        ) : null}
                       </View>
-                    </View>
-
-                    <View style={styles.centerPlayArea}>
-                      <View style={styles.playHalo}>
-                        <LinearGradient colors={['#6366F1', '#EC4899']} style={styles.playButton}>
-                          <Ionicons name="play" size={22} color="#FFFFFF" style={{ marginLeft: 2 }} />
-                        </LinearGradient>
-                      </View>
-                    </View>
-
-                    <View style={styles.waveformContainer}>
-                      <View style={styles.waveformBars}>
-                        {WAVEFORM_HEIGHTS.map((h, i) => (
-                          <View
-                            key={i}
-                            style={[styles.waveBar, { height: h, opacity: i < 11 ? 1 : 0.45 }]}
-                          />
-                        ))}
-                      </View>
-                      <Text style={styles.clipTitleOverlay} numberOfLines={1}>
-                        {currentClip.title}
-                      </Text>
-                    </View>
-                  </LinearGradient>
-                </View>
-
-                {/* Horizontal Clip Picker Strip */}
-                <View style={styles.stripContainer}>
-                  <Text style={styles.stripLabel}>Tap to Switch Practice Take</Text>
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.stripScroll}
-                  >
-                    {SAMPLE_CLIPS.map((clip, idx) => {
-                      const isSelected = selectedClipIndex === idx;
-                      return (
-                        <TouchableOpacity
-                          key={clip.id}
-                          activeOpacity={0.8}
-                          onPress={() => {
-                            setSelectedClipIndex(idx);
-                            if (!title) setTitle(clip.title);
-                          }}
-                          style={[styles.stripThumbnailCard, isSelected && styles.stripThumbnailActive]}
-                        >
-                          <Image source={{ uri: clip.thumbnail }} style={styles.miniStripImg} />
-                          <LinearGradient
-                            colors={['transparent', 'rgba(0,0,0,0.7)']}
-                            style={styles.miniStripOverlay}
-                          >
-                            <Text style={styles.miniStripDuration}>{clip.duration}</Text>
+                      <View style={styles.centerPlayArea}>
+                        <View style={styles.playHalo}>
+                          <LinearGradient colors={['#6366F1', '#EC4899']} style={styles.playButton}>
+                            <Ionicons name="play" size={22} color="#FFFFFF" style={{ marginLeft: 2 }} />
                           </LinearGradient>
-                          {isSelected && (
-                            <View style={styles.selectedCheckOverlay}>
-                              <Ionicons name="checkmark-circle" size={15} color="#4F46E5" />
-                            </View>
-                          )}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={() => handlePickVideo('library')}
+                        style={styles.changeVideoBtn}
+                      >
+                        <Ionicons name="swap-horizontal" size={13} color="#FFFFFF" />
+                        <Text style={styles.changeVideoText}>Change video</Text>
+                      </TouchableOpacity>
+                    </LinearGradient>
+                  </View>
+                ) : (
+                  <View style={styles.pickerEmpty}>
+                    <View style={styles.pickerIconCircle}>
+                      <Ionicons name="cloud-upload-outline" size={30} color="#4F46E5" />
+                    </View>
+                    <Text style={styles.pickerTitle}>Add your practice video</Text>
+                    <Text style={styles.pickerSub}>Record a new take or upload from your gallery.</Text>
+                    <View style={styles.pickerBtnRow}>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={() => handlePickVideo('record')}
+                        style={styles.pickerBtn}
+                      >
+                        <Ionicons name="videocam" size={17} color="#4F46E5" />
+                        <Text style={styles.pickerBtnText}>Record</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        activeOpacity={0.85}
+                        onPress={() => handlePickVideo('library')}
+                        style={styles.pickerBtn}
+                      >
+                        <Ionicons name="folder-open" size={17} color="#4F46E5" />
+                        <Text style={styles.pickerBtnText}>Upload</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
               </View>
             )}
 
@@ -717,12 +705,81 @@ const styles = StyleSheet.create({
     backgroundColor: '#0F172A',
     position: 'relative',
   },
+  thumbFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1E293B',
+  },
+  changeVideoBtn: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(15,23,42,0.7)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: borderRadius.full,
+  },
+  changeVideoText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  pickerEmpty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.xl,
+    paddingHorizontal: spacing.lg,
+  },
+  pickerIconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.sm,
+  },
+  pickerTitle: {
+    fontSize: typography.sizes.base,
+    fontWeight: typography.weights.bold,
+    color: '#0F172A',
+  },
+  pickerSub: {
+    fontSize: typography.sizes.xs,
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 2,
+    marginBottom: spacing.md,
+  },
+  pickerBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  pickerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 9,
+    paddingHorizontal: 18,
+    borderRadius: borderRadius.full,
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  pickerBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
   cinemaImage: {
     width: '100%',
     height: '100%',
   },
   cinemaOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'space-between',
     padding: spacing.sm,
   },
@@ -830,7 +887,7 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   miniStripOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'flex-end',
     padding: 3,
   },
