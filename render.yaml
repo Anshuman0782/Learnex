@@ -9,7 +9,7 @@ services:
     region: singapore # closest free region to India
     rootDir: backend
     # devDependencies are needed to compile (Nest CLI, TypeScript, Prisma CLI).
-    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
+    buildCommand: npm install --include=dev --no-audit --no-fund && npx prisma generate && npm run build
     # Apply pending DB migrations + idempotent catalog seed, then start.
     startCommand: npx prisma migrate deploy && npx prisma db seed && node dist/main
     healthCheckPath: /api/v1/health/live
