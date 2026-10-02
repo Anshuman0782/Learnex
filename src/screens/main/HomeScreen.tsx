@@ -102,13 +102,6 @@ export const HomeScreen: React.FC = () => {
     })
   ).current;
 
-  const handleNotificationPress = () => {
-    Alert.alert(
-      'Notifications 🔔',
-      `You have 2 new mentor critiques in ${selectedHobby || 'Music'} and 1 live feedback session available.`
-    );
-  };
-
   const handleProfilePress = () => {
     openMyProfile();
   };
@@ -245,7 +238,6 @@ export const HomeScreen: React.FC = () => {
       {/* Fixed Top Header */}
       <View style={{ paddingTop: Math.max(insets.top, 12), backgroundColor: '#FFFFFF' }}>
         <HomeHeader
-          onNotificationPress={handleNotificationPress}
           onProfilePress={handleProfilePress}
         />
       </View>

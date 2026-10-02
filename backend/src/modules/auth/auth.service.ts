@@ -44,6 +44,19 @@ export class AuthService {
   async register(dto: RegisterDto): Promise<AuthResult> {
     const phone = dto.phone?.replace(/\s+/g, '');
 
+    if (dto.dob) {
+      // Must be a real calendar date and the user at least 13 (max 100).
+      const [y, m, d] = dto.dob.split('-').map(Number);
+      const born = new Date(Date.UTC(y, m - 1, d));
+      const real = born.getUTCFullYear() === y && born.getUTCMonth() === m - 1 && born.getUTCDate() === d;
+      const now = new Date();
+      const age =
+        now.getUTCFullYear() - y - (now.getUTCMonth() < m - 1 || (now.getUTCMonth() === m - 1 && now.getUTCDate() < d) ? 1 : 0);
+      if (!real) throw new BadRequestException('Date of birth is not a real date');
+      if (age < 13) throw new BadRequestException('You must be at least 13 years old to join');
+      if (age > 100) throw new BadRequestException('Please check your date of birth');
+    }
+
     if (await this.users.existsByEmailOrPhone(dto.email, phone)) {
       throw new ConflictException('An account with this email or phone already exists');
     }

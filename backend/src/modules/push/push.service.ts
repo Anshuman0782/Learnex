@@ -6,7 +6,7 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const BATCH = 100;
 
 /** Android notification channels (created by the app; must match its ids). */
-export type PushChannel = 'default' | 'messages' | 'calls';
+export type PushChannel = 'default' | 'messages' | 'incoming_calls';
 
 export interface PushMessage {
   title: string;
@@ -18,8 +18,13 @@ export interface PushMessage {
   categoryId?: string;
   /** Seconds Expo/FCM keeps trying to deliver (calls are useless after ~30s). */
   ttl?: number;
-  /** false = no sound. */
-  sound?: boolean;
+  /** false = no sound; a string = bundled sound file (e.g. the ringtone). */
+  sound?: boolean | string;
+  /**
+   * Silent data-only push: no banner, no sound. Wakes the app's background
+   * task even when it's closed (e.g. "stop ringing, the call ended").
+   */
+  silent?: boolean;
 }
 
 interface ExpoTicket {
@@ -68,17 +73,27 @@ export class PushService {
     m: PushMessage,
   ): Promise<number> {
     const channelId = m.channel ?? 'default';
-    const payload = chunk.map((u) => ({
-      to: u.expoPushToken,
-      title: m.title,
-      body: m.body,
-      data: m.data ?? {},
-      sound: m.sound === false ? undefined : 'default',
-      priority: 'high',
-      channelId,
-      ...(m.categoryId ? { categoryId: m.categoryId } : {}),
-      ...(m.ttl ? { ttl: m.ttl } : {}),
-    }));
+    const payload = chunk.map((u) =>
+      m.silent
+        ? {
+            to: u.expoPushToken,
+            data: m.data ?? {},
+            priority: 'high',
+            _contentAvailable: true,
+            ...(m.ttl ? { ttl: m.ttl } : {}),
+          }
+        : {
+            to: u.expoPushToken,
+            title: m.title,
+            body: m.body,
+            data: m.data ?? {},
+            sound: m.sound === false ? undefined : typeof m.sound === 'string' ? m.sound : 'default',
+            priority: 'high',
+            channelId,
+            ...(m.categoryId ? { categoryId: m.categoryId } : {}),
+            ...(m.ttl ? { ttl: m.ttl } : {}),
+          },
+    );
     try {
       const res = await fetch(EXPO_PUSH_URL, {
         method: 'POST',

@@ -265,6 +265,7 @@ export class ChatService {
         title: me?.name ?? 'New message',
         body: text.length > 140 ? `${text.slice(0, 137)}…` : text,
         channel: 'messages',
+        categoryId: 'chat_message', // inline "Reply" button
         data: { kind: 'chat', conversationId, userId, fromName: me?.name, fromAvatar: me?.avatarUrl ?? undefined },
       });
     }

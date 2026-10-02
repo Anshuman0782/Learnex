@@ -21,32 +21,9 @@ import { Input, Button } from '../../components/common';
 import { takePhoto, pickPhoto } from '../../services/imagePicker';
 import { POPULAR_HOBBIES } from '../../data/mockData';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
+import { BirthdayPicker, birthdayError, parseDisplayDate, toDisplayDate, toIsoDate } from '../../components/common/BirthdayPicker';
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'SignUp'>;
-
-const YEARS = Array.from({ length: 45 }, (_, i) => String(2015 - i));
-const MONTHS = [
-  { val: '01', name: 'Jan' },
-  { val: '02', name: 'Feb' },
-  { val: '03', name: 'Mar' },
-  { val: '04', name: 'Apr' },
-  { val: '05', name: 'May' },
-  { val: '06', name: 'Jun' },
-  { val: '07', name: 'Jul' },
-  { val: '08', name: 'Aug' },
-  { val: '09', name: 'Sep' },
-  { val: '10', name: 'Oct' },
-  { val: '11', name: 'Nov' },
-  { val: '12', name: 'Dec' },
-];
-const DAYS = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
-const PRESET_DOBS = [
-  { label: '2000-05-17', year: '2000', month: '05', day: '17' },
-  { label: '1999-08-12', year: '1999', month: '08', day: '12' },
-  { label: '2001-03-24', year: '2001', month: '03', day: '24' },
-  { label: '2002-11-05', year: '2002', month: '11', day: '05' },
-  { label: '2004-07-19', year: '2004', month: '07', day: '19' },
-];
 
 export const SignUpScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -61,39 +38,21 @@ export const SignUpScreen: React.FC = () => {
   const [password, setPassword] = useState('');
   const [dob, setDob] = useState('');
   const [showDatePickerModal, setShowDatePickerModal] = useState(false);
-  const [selectedYear, setSelectedYear] = useState('2000');
-  const [selectedMonth, setSelectedMonth] = useState('05');
-  const [selectedDay, setSelectedDay] = useState('17');
   const [selectedHobby, setSelectedHobby] = useState('Music');
   const [customHobby, setCustomHobby] = useState('');
   const [isCustomHobby, setIsCustomHobby] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
+  /** Typing a birthday: digits only, auto-formatted as DD/MM/YYYY. */
   const handleDobChange = (text: string) => {
-    // Only numbers
     const digits = text.replace(/\D/g, '').slice(0, 8);
-    let formatted = '';
-
-    if (digits.length <= 4) {
-      formatted = digits;
-      if (digits.length === 4 && text.length >= dob.length) {
-        formatted = `${digits}-`;
-      }
-    } else if (digits.length <= 6) {
-      const y = digits.slice(0, 4);
-      const m = digits.slice(4);
-      formatted = `${y}-${m}`;
-      if (digits.length === 6 && text.length >= dob.length) {
-        formatted = `${y}-${m}-`;
-      }
-    } else {
-      const y = digits.slice(0, 4);
-      const m = digits.slice(4, 6);
-      const d = digits.slice(6, 8);
-      formatted = `${y}-${m}-${d}`;
-    }
-
+    const deleting = text.length < dob.length;
+    let formatted = digits;
+    if (digits.length > 4) formatted = `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+    else if (digits.length > 2) formatted = `${digits.slice(0, 2)}/${digits.slice(2)}`;
+    // Add the slash as soon as a part is complete (not while deleting).
+    if (!deleting && (digits.length === 2 || digits.length === 4)) formatted += '/';
     setDob(formatted);
     if (errors.dob) setErrors({ ...errors, dob: '' });
   };
@@ -103,8 +62,9 @@ export const SignUpScreen: React.FC = () => {
     if (!fullName.trim()) errs.fullName = 'Full Name is required';
     if (!phoneNumber.trim()) errs.phoneNumber = 'Phone Number is required';
     if (!email.trim() || !email.includes('@')) errs.email = 'Valid Email is required';
-    if (!password.trim() || password.length < 6) errs.password = 'Password must be at least 6 characters';
-    if (!dob.trim()) errs.dob = 'Date of birth is required (YYYY-MM-DD)';
+    if (!password.trim() || password.length < 8) errs.password = 'Password must be at least 8 characters';
+    const dobErr = birthdayError(dob.trim());
+    if (dobErr) errs.dob = dobErr;
     const finalHobby = isCustomHobby ? customHobby.trim() : selectedHobby;
     if (!finalHobby) errs.hobby = 'Please choose your primary interest';
     setErrors(errs);
@@ -122,7 +82,7 @@ export const SignUpScreen: React.FC = () => {
         phone: phoneNumber.trim(),
         email: email.trim(),
         password: password.trim(),
-        dob: dob.trim(),
+        dob: toIsoDate(parseDisplayDate(dob.trim())!), // server stores YYYY-MM-DD
         hobby: finalHobby,
         avatarUrl,
       });
@@ -322,7 +282,7 @@ export const SignUpScreen: React.FC = () => {
 
           <Input
             label="Date of Birth"
-            placeholder="YYYY-MM-DD (e.g. 2000-05-17)"
+            placeholder="DD/MM/YYYY — or tap the calendar"
             value={dob}
             onChangeText={handleDobChange}
             keyboardType="numeric"
@@ -430,152 +390,17 @@ export const SignUpScreen: React.FC = () => {
         </View>
       </ScrollView>
 
-      {/* Interactive Date of Birth Picker Modal */}
-      <Modal
+      {/* Birthday calendar (typing in the field works too) */}
+      <BirthdayPicker
         visible={showDatePickerModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowDatePickerModal(false)}
-      >
-        <View style={styles.datePickerBackdrop}>
-          <View style={styles.datePickerSheet}>
-            <View style={styles.dragHandle} />
-            <View style={styles.datePickerHeader}>
-              <View>
-                <Text style={styles.datePickerTitle}>Select Date of Birth</Text>
-                <Text style={styles.datePickerSub}>Tap to select Year, Month, and Day</Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setShowDatePickerModal(false)}
-                style={styles.closePickerBtn}
-              >
-                <Ionicons name="close" size={20} color="#64748B" />
-              </TouchableOpacity>
-            </View>
-
-            {/* Selected Date Preview Banner */}
-            <View style={styles.selectedDateBanner}>
-              <Ionicons name="calendar" size={18} color="#4F46E5" />
-              <Text style={styles.selectedDateText}>
-                {selectedYear}-{selectedMonth}-{selectedDay}
-              </Text>
-            </View>
-
-            {/* Quick Pick Presets */}
-            <View style={styles.presetSection}>
-              <Text style={styles.presetSectionLabel}>Quick Presets:</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetScroll}>
-                {PRESET_DOBS.map((p) => {
-                  const isActive = selectedYear === p.year && selectedMonth === p.month && selectedDay === p.day;
-                  return (
-                    <TouchableOpacity
-                      key={p.label}
-                      activeOpacity={0.8}
-                      onPress={() => {
-                        setSelectedYear(p.year);
-                        setSelectedMonth(p.month);
-                        setSelectedDay(p.day);
-                      }}
-                      style={[styles.presetChip, isActive && styles.presetChipActive]}
-                    >
-                      <Text style={[styles.presetChipText, isActive && styles.presetChipTextActive]}>
-                        {p.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
-
-            {/* 3 Column Selector: Year, Month, Day */}
-            <View style={styles.dateColumnsWrapper}>
-              {/* Year Column */}
-              <View style={styles.dateColumn}>
-                <Text style={styles.columnLabel}>Year</Text>
-                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
-                  {YEARS.map((y) => {
-                    const isActive = selectedYear === y;
-                    return (
-                      <TouchableOpacity
-                        key={y}
-                        onPress={() => setSelectedYear(y)}
-                        style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}
-                      >
-                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>
-                          {y}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-
-              {/* Month Column */}
-              <View style={styles.dateColumn}>
-                <Text style={styles.columnLabel}>Month</Text>
-                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
-                  {MONTHS.map((m) => {
-                    const isActive = selectedMonth === m.val;
-                    return (
-                      <TouchableOpacity
-                        key={m.val}
-                        onPress={() => setSelectedMonth(m.val)}
-                        style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}
-                      >
-                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>
-                          {m.val} ({m.name})
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-
-              {/* Day Column */}
-              <View style={styles.dateColumn}>
-                <Text style={styles.columnLabel}>Day</Text>
-                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
-                  {DAYS.map((d) => {
-                    const isActive = selectedDay === d;
-                    return (
-                      <TouchableOpacity
-                        key={d}
-                        onPress={() => setSelectedDay(d)}
-                        style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}
-                      >
-                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>
-                          {d}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            </View>
-
-            {/* Apply Button */}
-            <TouchableOpacity
-              activeOpacity={0.88}
-              onPress={() => {
-                setDob(`${selectedYear}-${selectedMonth}-${selectedDay}`);
-                if (errors.dob) setErrors({ ...errors, dob: '' });
-                setShowDatePickerModal(false);
-              }}
-              style={styles.applyDateBtn}
-            >
-              <LinearGradient
-                colors={['#4F46E5', '#7C3AED']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.applyDateGradient}
-              >
-                <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-                <Text style={styles.applyDateText}>Apply Date ({selectedYear}-{selectedMonth}-{selectedDay})</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+        value={parseDisplayDate(dob)}
+        onClose={() => setShowDatePickerModal(false)}
+        onSelect={(d) => {
+          setDob(toDisplayDate(d));
+          if (errors.dob) setErrors({ ...errors, dob: '' });
+          setShowDatePickerModal(false);
+        }}
+      />
     </KeyboardAvoidingView>
   );
 };

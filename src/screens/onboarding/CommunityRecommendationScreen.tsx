@@ -33,9 +33,12 @@ export const CommunityRecommendationScreen: React.FC = () => {
 
   const recommendedList = getRecommendedCommunities();
   const hasJoinedAny = joinedCommunities.length > 0;
+  // No real circles in this category yet → don't block onboarding.
+  const noneAvailable = recommendedList.length === 0;
+  const canContinue = hasJoinedAny || noneAvailable;
 
   const handleContinue = () => {
-    if (!hasJoinedAny) {
+    if (!canContinue) {
       Alert.alert(
         'Join a Community',
         'Please join at least one community to personalize your feed and connect with peers.'
@@ -69,6 +72,7 @@ export const CommunityRecommendationScreen: React.FC = () => {
           </Text>
         </View>
 
+        {!noneAvailable && (
         <View
           style={[
             styles.statusBanner,
@@ -93,6 +97,20 @@ export const CommunityRecommendationScreen: React.FC = () => {
               : 'Please join at least 1 community'}
           </Text>
         </View>
+        )}
+
+        {noneAvailable && (
+          <View style={styles.emptyCard}>
+            <View style={styles.emptyIcon}>
+              <Ionicons name="people-circle-outline" size={40} color={colors.primary} />
+            </View>
+            <Text style={styles.emptyTitle}>No {selectedHobby} circles yet</Text>
+            <Text style={styles.emptyText}>
+              You’re early! Continue setting up — you can start the first {selectedHobby} circle
+              from the Circles tab, and others who share your interest will find it.
+            </Text>
+          </View>
+        )}
 
         <View style={styles.list}>
           {recommendedList.map((comm) => (
@@ -116,10 +134,12 @@ export const CommunityRecommendationScreen: React.FC = () => {
           title={
             hasJoinedAny
               ? `Continue (${joinedCommunities.length} Joined) →`
+              : noneAvailable
+              ? 'Continue →'
               : 'Join at least 1 Community'
           }
           onPress={handleContinue}
-          disabled={!hasJoinedAny}
+          disabled={!canContinue}
           fullWidth
           size="lg"
         />
@@ -129,6 +149,19 @@ export const CommunityRecommendationScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
+  emptyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 22,
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  emptyIcon: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { fontSize: 17, fontWeight: '800', color: '#0F172A', textAlign: 'center' },
+  emptyText: { fontSize: 13, color: '#64748B', textAlign: 'center', lineHeight: 19 },
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',

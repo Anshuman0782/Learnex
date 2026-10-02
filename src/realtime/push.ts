@@ -2,6 +2,12 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { registerPushTokenRequest, unregisterPushTokenRequest } from '../api/calls.api';
 import { IS_EXPO_GO } from '../config/features';
+import { handleReplyAction } from './backgroundNotifications';
+
+/** LERNEX logo orange — tints the notification icon and LED. */
+const BRAND = '#F2542D';
+/** Bundled 28s ringtone (see app.json → expo-notifications → sounds). */
+const RINGTONE = 'lernex_ringtone.wav';
 
 /** Kept for existing callers. */
 export function isExpoGo(): boolean {
@@ -10,7 +16,7 @@ export function isExpoGo(): boolean {
 
 /** What the server puts in a push's `data` so a tap can open the right screen. */
 export interface PushData {
-  kind?: 'call' | 'chat' | 'post' | 'profile' | 'missed_call' | 'event' | 'circle' | 'announcement';
+  kind?: 'call' | 'call_cancel' | 'chat' | 'post' | 'profile' | 'missed_call' | 'event' | 'circle' | 'announcement';
   callId?: string;
   callType?: 'voice' | 'video';
   fromUserId?: string;
@@ -71,7 +77,7 @@ async function configure(Notifications: NotificationsModule) {
       importance: Notifications.AndroidImportance.HIGH,
       sound: 'default',
       vibrationPattern: [0, 200, 120, 200],
-      lightColor: '#4F46E5',
+      lightColor: BRAND,
     });
     await Notifications.setNotificationChannelAsync('messages', {
       name: 'Messages',
@@ -79,18 +85,33 @@ async function configure(Notifications: NotificationsModule) {
       importance: Notifications.AndroidImportance.MAX,
       sound: 'default',
       vibrationPattern: [0, 250, 150, 250],
-      lightColor: '#4F46E5',
+      lightColor: BRAND,
     });
-    await Notifications.setNotificationChannelAsync('calls', {
-      name: 'Calls',
-      description: 'Incoming voice and video calls',
+    // Calls RING: a 28-second ringtone + long vibration, shown on the lock
+    // screen. (Android channel sounds can't change after creation, hence a new
+    // channel id instead of the old 'calls'.)
+    await Notifications.setNotificationChannelAsync('incoming_calls', {
+      name: 'Incoming calls',
+      description: 'Rings when someone calls you',
       importance: Notifications.AndroidImportance.MAX,
-      sound: 'default',
-      vibrationPattern: [0, 800, 400, 800, 400, 800],
+      sound: RINGTONE,
+      vibrationPattern: [0, 1000, 800, 1000, 800, 1000, 800, 1000, 800, 1000, 800, 1000],
       lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-      lightColor: '#16A34A',
+      lightColor: BRAND,
+      enableVibrate: true,
     });
+    await Notifications.deleteNotificationChannelAsync('calls').catch(() => undefined);
   }
+
+  // WhatsApp-style inline reply on message notifications (works while closed).
+  await Notifications.setNotificationCategoryAsync('chat_message', [
+    {
+      identifier: 'reply',
+      buttonTitle: 'Reply',
+      textInput: { submitButtonTitle: 'Send', placeholder: 'Type a reply…' },
+      options: { opensAppToForeground: false },
+    },
+  ]);
 
   await Notifications.setNotificationCategoryAsync('incoming_call', [
     { identifier: 'answer', buttonTitle: 'Answer', options: { opensAppToForeground: true } },
@@ -151,6 +172,15 @@ export function subscribeToPushTaps(onTap: (tap: PushTap) => void): () => void {
     await configure(Notifications);
     const handle = (r: import('expo-notifications').NotificationResponse | null) => {
       if (!r) return;
+      // Inline reply: send it, don't open anything.
+      if (r.actionIdentifier === 'reply') {
+        void handleReplyAction(
+          r.notification.request.identifier,
+          (r.notification.request.content.data ?? {}) as Record<string, unknown>,
+          r.userText,
+        );
+        return;
+      }
       onTap({
         data: (r.notification.request.content.data ?? {}) as PushData,
         action: r.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER ? 'default' : r.actionIdentifier,

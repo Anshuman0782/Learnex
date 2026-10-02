@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "205786031792",
+    "project_id": "learnex-2dfb5",
+    "storage_bucket": "learnex-2dfb5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:205786031792:android:63fceb5d604dbb25d0bd75",
+        "android_client_info": {
+          "package_name": "com.lernex.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCKfoRzqp5PR8dPNFBipW9X3g2DT7orOE8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

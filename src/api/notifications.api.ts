@@ -26,3 +26,11 @@ export function getUnreadCountRequest(): Promise<{ count: number }> {
 export function markNotificationsReadRequest(): Promise<{ success: true }> {
   return apiRequest<{ success: true }>('/notifications/read', { method: 'POST' });
 }
+
+export function deleteNotificationRequest(id: string): Promise<{ success: true }> {
+  return apiRequest<{ success: true }>(`/notifications/${id}`, { method: 'DELETE' });
+}
+
+export function clearNotificationsRequest(): Promise<{ success: true; deleted: number }> {
+  return apiRequest<{ success: true; deleted: number }>('/notifications', { method: 'DELETE' });
+}

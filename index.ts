@@ -1,3 +1,6 @@
+// Must load first: background notification work (reply from notification,
+// stop call ringing) runs even when the app is closed.
+import './src/realtime/backgroundNotifications';
 import { registerRootComponent } from 'expo';
 import App from './App';
 

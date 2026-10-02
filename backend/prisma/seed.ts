@@ -4,28 +4,22 @@ import { COMMUNITIES, SKILLS } from './seed-data.js';
 const prisma = new PrismaClient();
 
 /**
- * Idempotent seed: upserts the community + skill catalog. Safe to run repeatedly
- * (never touches users or their memberships).
+ * Idempotent seed: upserts the skill catalog and removes unused demo circles.
+ * Safe to run repeatedly (never touches users, real circles or memberships).
  */
 async function main() {
-  console.log('Seeding communities…');
-  for (const c of COMMUNITIES) {
-    const data = {
-      name: c.name,
-      category: c.category,
-      description: c.description,
-      iconName: c.iconName,
-      iconBgColor: c.iconBgColor,
-      iconColor: c.iconColor,
-      isHot: c.isHot ?? false,
-      tags: c.tags,
-    };
-    await prisma.community.upsert({
-      where: { id: c.id },
-      create: { id: c.id, ...data },
-      update: data,
-    });
-  }
+  // Circles are created by real users — the old demo catalog is NOT seeded any
+  // more. Remove catalog circles nobody ever used (no members, posts or events);
+  // any that real people joined are kept.
+  const removed = await prisma.community.deleteMany({
+    where: {
+      id: { in: COMMUNITIES.map((c) => c.id) },
+      memberships: { none: {} },
+      postLinks: { none: {} },
+      events: { none: {} },
+    },
+  });
+  if (removed.count) console.log(`Removed ${removed.count} unused demo circles.`);
 
   console.log('Seeding skills…');
   for (const s of SKILLS) {

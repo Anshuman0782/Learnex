@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Community, CommunityRole, UserRole } from '@prisma/client';
+import { Community, CommunityRole, Prisma, UserRole } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service.js';
 
@@ -214,25 +214,33 @@ export class CommunitiesService {
     return view;
   }
 
+  /** A circle is "real" when at least one active person belongs to it. */
+  private readonly hasMembers: Prisma.CommunityWhereInput = {
+    memberships: { some: { user: { deletedAt: null } } },
+  };
+
+  /** Real circles only (empty ones are never listed), optionally by category. */
   async findAll(userId: string, category?: string): Promise<CommunityView[]> {
     const communities = await this.prisma.community.findMany({
-      where: category ? { category: { equals: category, mode: 'insensitive' } } : undefined,
+      where: {
+        ...this.hasMembers,
+        ...(category ? { category: { equals: category, mode: 'insensitive' } } : {}),
+      },
       orderBy: [{ isHot: 'desc' }, { name: 'asc' }],
     });
     return this.enrich(communities, userId);
   }
 
+  /**
+   * Real circles in the user's OWN category only — no fallback to other
+   * categories. If none exist yet, the list is simply empty (they can create one).
+   */
   async findRecommended(userId: string, hobby?: string | null): Promise<CommunityView[]> {
-    let communities = await this.prisma.community.findMany({
-      where: hobby ? { category: { equals: hobby, mode: 'insensitive' } } : undefined,
+    if (!hobby?.trim()) return [];
+    const communities = await this.prisma.community.findMany({
+      where: { ...this.hasMembers, category: { equals: hobby.trim(), mode: 'insensitive' } },
       orderBy: [{ isHot: 'desc' }, { name: 'asc' }],
     });
-    if (communities.length === 0) {
-      communities = await this.prisma.community.findMany({
-        take: 4,
-        orderBy: [{ isHot: 'desc' }, { name: 'asc' }],
-      });
-    }
     return this.enrich(communities, userId);
   }
 

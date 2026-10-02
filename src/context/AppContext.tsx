@@ -88,6 +88,8 @@ import {
   getNotificationsRequest,
   getUnreadCountRequest,
   markNotificationsReadRequest,
+  deleteNotificationRequest,
+  clearNotificationsRequest,
   type AppNotification,
 } from '../api/notifications.api';
 import { connectSocket, disconnectSocket } from '../realtime/socket';
@@ -297,6 +299,8 @@ interface AppContextType {
   openNotifications: () => void;
   closeNotifications: () => void;
   markNotificationsRead: () => Promise<void>;
+  deleteNotification: (id: string) => Promise<void>;
+  clearNotifications: () => Promise<void>;
   /** NotificationRouter registers how to open a notification's target. */
   setNotificationOpener: (fn: ((data: PushData) => void) | null) => void;
 }
@@ -480,6 +484,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     } catch {
       /* ignore */
+    }
+  };
+
+  /** Delete one notification (optimistic; restored if the server refuses). */
+  const deleteNotification = async (id: string) => {
+    const before = notifications;
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    setUnreadCount((c) => Math.max(0, c - (before.find((n) => n.id === id && !n.read) ? 1 : 0)));
+    try {
+      await deleteNotificationRequest(id);
+    } catch {
+      setNotifications(before);
+    }
+  };
+
+  /** Clear the whole notification history. */
+  const clearNotifications = async () => {
+    const before = notifications;
+    setNotifications([]);
+    setUnreadCount(0);
+    try {
+      await clearNotificationsRequest();
+    } catch {
+      setNotifications(before);
     }
   };
 
@@ -1606,6 +1634,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         openNotifications,
         closeNotifications,
         markNotificationsRead,
+        deleteNotification,
+        clearNotifications,
         setNotificationOpener,
       }}
     >
@@ -1616,6 +1646,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         onClose={closeNotifications}
         onMarkRead={markNotificationsRead}
         onOpen={openNotificationItem}
+        onDelete={deleteNotification}
+        onClearAll={clearNotifications}
       />
       <VideoPlayerModal
         visible={!!activeVideoUrl}

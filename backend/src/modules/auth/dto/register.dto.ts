@@ -35,7 +35,7 @@ export class RegisterDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(20)
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'dob must be YYYY-MM-DD' })
   dob?: string;
 
   @IsOptional()

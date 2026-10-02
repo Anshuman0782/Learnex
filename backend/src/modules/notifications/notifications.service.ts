@@ -115,6 +115,24 @@ export class NotificationsService {
     return { count };
   }
 
+  /** Delete one of MY notifications (someone else's id simply matches nothing). */
+  async remove(userId: string, id: string): Promise<{ success: true }> {
+    await this.prisma.notification.deleteMany({ where: { id, userId } });
+    return { success: true };
+  }
+
+  /** Clear my whole notification history. */
+  async clearAll(userId: string): Promise<{ success: true; deleted: number }> {
+    const res = await this.prisma.notification.deleteMany({ where: { userId } });
+    return { success: true, deleted: res.count };
+  }
+
+  /** Mark one of my notifications read. */
+  async markOneRead(userId: string, id: string): Promise<{ success: true }> {
+    await this.prisma.notification.updateMany({ where: { id, userId }, data: { read: true } });
+    return { success: true };
+  }
+
   async markAllRead(userId: string): Promise<{ success: true }> {
     await this.prisma.notification.updateMany({
       where: { userId, read: false },

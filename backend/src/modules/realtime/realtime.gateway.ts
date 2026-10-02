@@ -32,6 +32,8 @@ interface CallSession {
   state: 'ringing' | 'active';
   startedAt: number;
   timer?: ReturnType<typeof setTimeout>;
+  /** A ringing call notification was pushed to the callee's phone. */
+  rangPhone?: boolean;
 }
 
 /** How long a call rings before it's a missed call. */
@@ -178,6 +180,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       const c = this.participantCall(self.userId, body?.callId);
       if (!c || c.calleeId !== self.userId || c.state !== 'ringing') return;
       if (c.timer) clearTimeout(c.timer);
+      this.stopRinging(c);
       c.state = 'active';
       c.startedAt = Date.now();
       c.timer = setTimeout(() => this.finishCall(c), MAX_CALL_MS);
@@ -289,10 +292,12 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.emitToUser(toUserId, 'call:incoming', this.incomingPayload(c));
     // App closed or in the background → ring the phone with a call notification.
     if (!this.isActive(toUserId)) {
+      c.rangPhone = true;
       void this.push.sendToUser(toUserId, {
-        title: `Incoming ${callType} call`,
+        title: `📞 Incoming ${callType} call`,
         body: `${self.name} is calling you…`,
-        channel: 'calls',
+        channel: 'incoming_calls',
+        sound: 'lernex_ringtone.wav',
         categoryId: 'incoming_call',
         ttl: 30,
         data: { kind: 'call', callId, callType, fromUserId: self.userId, fromName: self.name },
@@ -319,7 +324,21 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     return c;
   }
 
+  /** Silent push → the callee's phone removes the call notification (stops ringing). */
+  private stopRinging(c: CallSession) {
+    if (!c.rangPhone) return;
+    c.rangPhone = false;
+    void this.push.sendToUser(c.calleeId, {
+      title: '',
+      body: '',
+      silent: true,
+      ttl: 60,
+      data: { kind: 'call_cancel', callId: c.callId },
+    });
+  }
+
   private finishCall(c: CallSession) {
+    this.stopRinging(c);
     if (c.timer) clearTimeout(c.timer);
     this.calls.delete(c.callId);
     if (this.userCall.get(c.callerId) === c.callId) this.userCall.delete(c.callerId);
