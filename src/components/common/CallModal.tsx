@@ -64,7 +64,7 @@ export const CallModal: React.FC = () => {
       <View style={styles.container}>
         {/* Remote video fills the screen; otherwise a gradient + avatar */}
         {showRemoteVideo && RTCView ? (
-          <RTCView streamURL={call.remoteStream!.toURL()} style={styles.remoteVideo} objectFit="cover" />
+          <RTCView streamURL={call.remoteStream!.toURL()} style={styles.remoteVideo} objectFit="cover" zOrder={0} />
         ) : (
           <LinearGradient colors={['#312E81', '#4F46E5', '#7C3AED']} style={styles.remoteVideo} />
         )}
@@ -72,7 +72,17 @@ export const CallModal: React.FC = () => {
         {/* Local preview (PiP) */}
         {showLocalVideo && RTCView && (
           <View style={styles.localWrap}>
-            <RTCView streamURL={call.localStream!.toURL()} style={styles.localVideo} objectFit="cover" mirror />
+            {/* zOrder 1 + re-mount when the remote video appears: on Android both
+                videos are native surfaces, and without this the full-screen remote
+                surface can cover the self-view until it's toggled. */}
+            <RTCView
+              key={`local-${showRemoteVideo ? 'over-remote' : 'alone'}`}
+              streamURL={call.localStream!.toURL()}
+              style={styles.localVideo}
+              objectFit="cover"
+              mirror
+              zOrder={1}
+            />
           </View>
         )}
 

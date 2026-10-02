@@ -12,6 +12,7 @@ export type AuthStackParamList = {
   Splash: undefined;
   Login: undefined;
   SignUp: undefined;
+  VerifyEmail: { autoSend?: boolean } | undefined;
   ForgotPassword: undefined;
   CommunityRecommendation: undefined;
   RoleSelection: undefined;

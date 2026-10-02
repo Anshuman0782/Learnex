@@ -32,6 +32,7 @@ export class UsersController {
       name: dto.name,
       bio: dto.bio,
       handle: dto.handle,
+      hobby: dto.hobby?.trim(),
     });
     return toSafeUser(updated);
   }

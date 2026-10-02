@@ -72,6 +72,19 @@ class EnvironmentVariables {
   @IsString()
   CLOUDINARY_URL?: string;
 
+  // --- Email (Brevo HTTPS API; free 300/day) ---
+  @IsOptional()
+  @IsString()
+  BREVO_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  MAIL_FROM_EMAIL?: string;
+
+  @IsOptional()
+  @IsString()
+  MAIL_FROM_NAME?: string;
+
   // --- Optional TURN relay for calls ---
   @IsOptional()
   @IsString()

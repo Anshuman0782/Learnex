@@ -5,6 +5,7 @@ import { SplashScreen } from '../screens/SplashScreen';
 import { LoginScreen } from '../screens/auth/LoginScreen';
 import { ForgotPasswordScreen } from '../screens/auth/ForgotPasswordScreen';
 import { SignUpScreen } from '../screens/auth/SignUpScreen';
+import { VerifyEmailScreen } from '../screens/auth/VerifyEmailScreen';
 import { CommunityRecommendationScreen } from '../screens/onboarding/CommunityRecommendationScreen';
 import { RoleSelectionScreen } from '../screens/onboarding/RoleSelectionScreen';
 import { MentorQuizScreen } from '../screens/onboarding/MentorQuizScreen';
@@ -25,6 +26,7 @@ export const AuthNavigator: React.FC = () => {
       <Stack.Screen name="Login" component={LoginScreen} />
       <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
       <Stack.Screen name="SignUp" component={SignUpScreen} />
+      <Stack.Screen name="VerifyEmail" component={VerifyEmailScreen} options={{ gestureEnabled: false }} />
       <Stack.Screen
         name="CommunityRecommendation"
         component={CommunityRecommendationScreen}

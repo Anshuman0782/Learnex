@@ -86,7 +86,7 @@ export const SignUpScreen: React.FC = () => {
         hobby: finalHobby,
         avatarUrl,
       });
-      navigation.navigate('CommunityRecommendation');
+      navigation.reset({ index: 0, routes: [{ name: 'VerifyEmail' }] }); // code already emailed
     } catch (err: any) {
       const status = err?.status;
       const message =

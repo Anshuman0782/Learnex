@@ -37,4 +37,8 @@ services:
         value: 15m
       - key: JWT_REFRESH_EXPIRES_IN
         value: 7d
+      # Add in the Environment tab (secrets, not committed):
+      #   BREVO_API_KEY    — Brevo → SMTP & API → API Keys (free, 300 emails/day)
+      #   MAIL_FROM_EMAIL  — the sender email you verified in Brevo
+      #   MAIL_FROM_NAME   — e.g. LERNEX
       # Optional later (Environment tab): TURN_URL, TURN_USERNAME, TURN_CREDENTIAL

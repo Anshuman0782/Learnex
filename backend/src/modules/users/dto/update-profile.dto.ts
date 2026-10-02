@@ -21,4 +21,11 @@ export class UpdateProfileDto {
   @IsString()
   @MaxLength(40)
   handle?: string;
+
+  /** Primary focus track / hobby (drives circle recommendations). */
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(40)
+  hobby?: string;
 }

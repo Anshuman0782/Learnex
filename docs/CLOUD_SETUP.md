@@ -57,6 +57,21 @@ Render deploys from GitHub.
 5. If Render gave your service a different address, tell Claude (the app
    build must point to it — `eas.json` → `EXPO_PUBLIC_API_URL`).
 
+## Step 4b — Email (Brevo, free, no card)
+
+Sign-up verification, forgot password and email/phone change codes are sent by
+email. Render's free plan blocks normal email (SMTP), so LERNEX uses Brevo's API.
+
+1. Sign up at <https://www.brevo.com> (free plan: 300 emails/day, no card).
+2. **Senders, Domains & Dedicated IPs → Senders → Add a sender** → your Gmail
+   (e.g. `anshumansarkar600@gmail.com`) → confirm the email Brevo sends you.
+3. **SMTP & API → API Keys → Generate a new API key** → copy it.
+4. Render → your service → **Environment** → add:
+   - `BREVO_API_KEY` = the key
+   - `MAIL_FROM_EMAIL` = the sender you verified
+   - `MAIL_FROM_NAME` = `LERNEX`
+5. Save — Render restarts the server with email turned on.
+
 ## Step 5 — Keep it awake (cron-job.org)
 
 Render's free server sleeps after 15 minutes without traffic (the first visit

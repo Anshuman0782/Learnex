@@ -86,7 +86,9 @@ export const SplashScreen: React.FC = () => {
       Animated.timing(progress, { toValue: 1, duration: 220, useNativeDriver: false }),
       Animated.timing(fadeOut, { toValue: 0, duration: 320, delay: 160, useNativeDriver: true }),
     ]).start(() => {
-      if (user && selectedRole) {
+      if (user && !user.emailVerified) {
+        navigation.reset({ index: 0, routes: [{ name: 'VerifyEmail', params: { autoSend: true } }] });
+      } else if (user && selectedRole) {
         navigation.reset({ index: 0, routes: [{ name: 'Main', params: { screen: 'HomeTab' } }] });
       } else if (user) {
         navigation.reset({ index: 0, routes: [{ name: 'RoleSelection' }] });

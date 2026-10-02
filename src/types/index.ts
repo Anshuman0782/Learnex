@@ -24,6 +24,8 @@ export interface User {
   seasonRank?: number;
   /** Can open the Admin Panel (UI hint only — the server re-checks every call). */
   isAdmin?: boolean;
+  /** Proved ownership of their email (code sent at sign-up / after a change). */
+  emailVerified?: boolean;
 }
 
 // A real community member = an actual joined user. Profile extras (avatar, xp,

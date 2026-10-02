@@ -25,6 +25,10 @@ import {
   loginRequest,
   logoutRequest,
   meRequest,
+  sendVerificationRequest,
+  confirmVerificationRequest,
+  requestContactChangeRequest,
+  confirmContactChangeRequest,
   registerRequest,
   type ApiUser,
   type AuthResponse,
@@ -239,7 +243,8 @@ interface AppContextType {
   claimReward: (rewardId: string) => Promise<{ title: string; code: string } | null>;
   // Auth & General
   bootstrapping: boolean;
-  login: (identifier: string, pass: string) => Promise<void>;
+  /** Signs in; resolves to the signed-in user (for routing). */
+  login: (identifier: string, pass: string) => Promise<User>;
   signup: (data: {
     name: string;
     phone: string;
@@ -300,6 +305,11 @@ interface AppContextType {
   closeNotifications: () => void;
   markNotificationsRead: () => Promise<void>;
   deleteNotification: (id: string) => Promise<void>;
+  sendEmailVerification: () => Promise<void>;
+  confirmEmailVerification: (code: string) => Promise<void>;
+  /** Sends a code to the current email; resolves to the masked address. */
+  requestContactChange: (body: { email?: string; phone?: string }) => Promise<string>;
+  confirmContactChange: (code: string) => Promise<void>;
   clearNotifications: () => Promise<void>;
   /** NotificationRouter registers how to open a notification's target. */
   setNotificationOpener: (fn: ((data: PushData) => void) | null) => void;
@@ -839,6 +849,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     seasonXp: user?.seasonXp,
     seasonRank: user?.seasonRank,
     isAdmin: !!api.isAdmin,
+    emailVerified: !!api.emailVerifiedAt,
   });
 
   const applySession = (api: ApiUser, avatarOverride?: string) => {
@@ -882,10 +893,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const login = async (identifier: string, pass: string): Promise<void> => {
+  const login = async (identifier: string, pass: string): Promise<User> => {
     const { user: apiUser, tokens } = await loginRequest(identifier.trim(), pass);
     await saveTokens(tokens);
     applySession(apiUser);
+    return toLocalUser(apiUser);
   };
 
   const signup = async (data: {
@@ -929,20 +941,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUser((prev) => (prev ? { ...prev, ...data } : null));
     if (data.hobby) setSelectedHobby(data.hobby);
     if (data.role) setSelectedRole(data.role);
-    // Persist server-backed profile fields (name/avatar/bio/handle); hobby stays local.
+    // Persist server-backed profile fields (email/phone change via a verified flow).
     if (
       data.name !== undefined ||
       data.avatarUrl !== undefined ||
       data.bio !== undefined ||
-      data.handle !== undefined
+      data.handle !== undefined ||
+      data.hobby !== undefined
     ) {
       await updateProfileRequest({
         name: data.name,
         avatarUrl: data.avatarUrl,
         bio: data.bio,
         handle: data.handle,
+        hobby: data.hobby,
       });
+      // A new focus track changes which circles are recommended.
+      if (data.hobby !== undefined) {
+        getRecommendedCommunitiesRequest().then((c) => setRecommendedCommunities(c as any)).catch(() => {});
+      }
     }
+  };
+
+  /** Merge a fresh server user into local state (keeps local-only stats). */
+  const mergeApiUser = (api: ApiUser) => {
+    setUser((prev) => (prev ? { ...prev, ...toLocalUser(api), joinedCommunities: prev.joinedCommunities } : prev));
+  };
+
+  const sendEmailVerification = async () => {
+    await sendVerificationRequest();
+  };
+
+  const confirmEmailVerification = async (code: string) => {
+    mergeApiUser(await confirmVerificationRequest(code));
+  };
+
+  const requestContactChange = async (body: { email?: string; phone?: string }) =>
+    (await requestContactChangeRequest(body)).to;
+
+  const confirmContactChange = async (code: string) => {
+    mergeApiUser(await confirmContactChangeRequest(code));
   };
 
   /** Delete one of your own comments and update the feed. */
@@ -1636,6 +1674,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markNotificationsRead,
         deleteNotification,
         clearNotifications,
+        sendEmailVerification,
+        confirmEmailVerification,
+        requestContactChange,
+        confirmContactChange,
         setNotificationOpener,
       }}
     >

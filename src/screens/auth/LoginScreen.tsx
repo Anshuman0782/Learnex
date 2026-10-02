@@ -48,10 +48,13 @@ export const LoginScreen: React.FC = () => {
     if (!validate()) return;
     setLoading(true);
     try {
-      await login(identifier, password);
+      const me = await login(identifier, password);
+      // Unverified email → verify first (a fresh code is sent automatically).
       navigation.reset({
         index: 0,
-        routes: [{ name: 'Main', params: { screen: 'HomeTab' } }],
+        routes: me.emailVerified
+          ? [{ name: 'Main', params: { screen: 'HomeTab' } }]
+          : [{ name: 'VerifyEmail', params: { autoSend: true } }],
       });
     } catch (err: any) {
       const status = err?.status;

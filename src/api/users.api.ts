@@ -6,6 +6,7 @@ export interface UpdateProfileBody {
   name?: string;
   bio?: string;
   handle?: string;
+  hobby?: string;
 }
 
 export function updateProfileRequest(body: UpdateProfileBody): Promise<ApiUser> {

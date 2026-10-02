@@ -42,6 +42,8 @@ model User {
   // Admin Panel access. Checked against the DB on every admin request, so a
   // revoke takes effect immediately. Owners (ADMIN_EMAILS) are always admin.
   isAdmin          Boolean   @default(false) @map("is_admin")
+  /// When the user proved they own their email (null = not verified yet).
+  emailVerifiedAt  DateTime? @map("email_verified_at")
   adminGrantedAt   DateTime? @map("admin_granted_at")
   adminGrantedById String?   @map("admin_granted_by_id")
 
@@ -76,6 +78,7 @@ model User {
   reportsMade    Report[]        @relation("Reporter")
   reportsAgainst Report[]        @relation("ReportedUser")
   passwordResets PasswordReset[]
+  emailCodes     EmailCode[]
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt      @map("updated_at")
@@ -750,6 +753,8 @@ model PasswordReset {
   codeHash  String    @map("code_hash")
   expiresAt DateTime  @map("expires_at")
   usedAt    DateTime? @map("used_at")
+  /// Wrong guesses so far (the code dies after 5).
+  attempts  Int       @default(0)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -757,6 +762,27 @@ model PasswordReset {
 
   @@index([userId])
   @@map("password_resets")
+}
+
+/// One-time 6-digit codes sent by email (hashed; 15-min expiry; 5 attempts).
+model EmailCode {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  /// VERIFY_EMAIL | CHANGE_CONTACT
+  purpose   String
+  codeHash  String    @map("code_hash")
+  /// For CHANGE_CONTACT: the requested new email / phone.
+  newEmail  String?   @map("new_email")
+  newPhone  String?   @map("new_phone")
+  attempts  Int       @default(0)
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@map("email_codes")
 }
 
 /// A private 1:1 chat between two users. The pair is stored sorted

@@ -11,6 +11,7 @@ import { User, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { randomInt } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { MailService } from '../mail/mail.service.js';
 import { UsersService } from '../users/users.service.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { LoginDto } from './dto/login.dto.js';
@@ -29,6 +30,11 @@ export interface AuthResult {
   tokens: AuthTokens;
 }
 
+/** One-time code rules (verification, contact change, password reset). */
+const CODE_TTL_MS = 15 * 60 * 1000;
+const RESEND_GAP_MS = 60 * 1000;
+const MAX_CODE_ATTEMPTS = 5;
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -37,6 +43,7 @@ export class AuthService {
     private readonly users: UsersService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly mail: MailService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -71,7 +78,10 @@ export class AuthService {
       hobby: dto.hobby,
     });
 
-    return this.issueSession(user);
+    // Send the "verify your email" code right away (sign-up still succeeds if
+    // the email can't be sent — they can resend from the app).
+    await this.sendVerification(user.id, true).catch((e) => this.logger.warn(`Verify email not sent: ${String(e)}`));
+    return this.issueSession(await this.ensureOwnerAdmin(user));
   }
 
   /** Verify credentials and start a session. */
@@ -89,7 +99,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    return this.issueSession(user);
+    return this.issueSession(await this.ensureOwnerAdmin(user));
   }
 
   /** Rotate tokens: only succeeds if the presented refresh token matches the stored hash. */
@@ -120,7 +130,7 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException('Account not found');
     }
-    return this.toSafeUser(user);
+    return this.toSafeUser(await this.ensureOwnerAdmin(user));
   }
 
   /**
@@ -148,10 +158,10 @@ export class AuthService {
     });
     await this.prisma.passwordReset.create({ data: { userId: user.id, codeHash, expiresAt } });
 
+    await this.mail.sendCode({ email: user.email, name: user.name }, 'reset', code);
+    // Dev convenience only (no email provider configured locally).
     const isProd = this.config.get<string>('NODE_ENV') === 'production';
-    this.logger.log(`Password reset code for ${user.email}: ${code}`);
-    // TODO(prod): send `code` via a free email provider (e.g. Resend/Gmail SMTP).
-    return isProd ? { sent: true } : { sent: true, devCode: code };
+    return !isProd && !this.mail.configured ? { sent: true, devCode: code } : { sent: true };
   }
 
   /** Complete a password reset with the emailed code. */
@@ -171,21 +181,159 @@ export class AuthService {
       where: { userId: user.id, usedAt: null, expiresAt: { gt: new Date() } },
       orderBy: { createdAt: 'desc' },
     });
-    if (!reset || !(await argon2.verify(reset.codeHash, code))) {
+    if (!reset || reset.attempts >= MAX_CODE_ATTEMPTS) {
+      throw new BadRequestException('Invalid or expired reset code');
+    }
+    if (!(await argon2.verify(reset.codeHash, code))) {
+      await this.prisma.passwordReset.update({ where: { id: reset.id }, data: { attempts: { increment: 1 } } });
       throw new BadRequestException('Invalid or expired reset code');
     }
 
     const passwordHash = await argon2.hash(newPassword);
     await this.prisma.user.update({
       where: { id: user.id },
-      // Setting a new password also revokes any active session.
-      data: { passwordHash, hashedRefreshToken: null },
+      // Setting a new password also revokes any active session. Receiving the
+      // code proves they own the email, so it counts as verified too.
+      data: { passwordHash, hashedRefreshToken: null, emailVerifiedAt: user.emailVerifiedAt ?? new Date() },
     });
     await this.prisma.passwordReset.update({
       where: { id: reset.id },
       data: { usedAt: new Date() },
     });
     return { success: true };
+  }
+
+  // --- email verification & contact changes ---
+
+  /** Owners (ADMIN_EMAILS) get Admin Panel access the moment they sign up / log in. */
+  private async ensureOwnerAdmin(user: User): Promise<User> {
+    const owners = (this.config.get<string>('ADMIN_EMAILS') ?? '')
+      .split(',')
+      .map((e) => e.trim().replace(/^["']|["']$/g, '').toLowerCase())
+      .filter(Boolean);
+    if (user.isAdmin || !owners.includes(user.email.toLowerCase())) return user;
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: { isAdmin: true, adminGrantedAt: new Date() },
+    });
+  }
+
+  /** Creates a fresh code for (user, purpose), invalidating older ones. */
+  private async newEmailCode(
+    userId: string,
+    purpose: 'VERIFY_EMAIL' | 'CHANGE_CONTACT',
+    extra: { newEmail?: string | null; newPhone?: string | null } = {},
+    /** Skip the 60s resend gap (system-triggered, e.g. right after an email change). */
+    force = false,
+  ): Promise<string> {
+    if (!force) {
+      const recent = await this.prisma.emailCode.findFirst({
+        where: { userId, purpose, createdAt: { gt: new Date(Date.now() - RESEND_GAP_MS) } },
+      });
+      if (recent) throw new BadRequestException('Please wait a minute before requesting another code');
+    }
+    await this.prisma.emailCode.updateMany({ where: { userId, purpose, usedAt: null }, data: { usedAt: new Date() } });
+    const code = String(randomInt(100000, 1000000));
+    await this.prisma.emailCode.create({
+      data: {
+        userId,
+        purpose,
+        codeHash: await argon2.hash(code),
+        newEmail: extra.newEmail ?? null,
+        newPhone: extra.newPhone ?? null,
+        expiresAt: new Date(Date.now() + CODE_TTL_MS),
+      },
+    });
+    return code;
+  }
+
+  /** Checks a code; burns it after 5 wrong tries. Returns the code row. */
+  private async useEmailCode(userId: string, purpose: 'VERIFY_EMAIL' | 'CHANGE_CONTACT', code: string) {
+    const row = await this.prisma.emailCode.findFirst({
+      where: { userId, purpose, usedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!row || row.attempts >= MAX_CODE_ATTEMPTS) throw new BadRequestException('Invalid or expired code');
+    if (!(await argon2.verify(row.codeHash, code))) {
+      await this.prisma.emailCode.update({ where: { id: row.id }, data: { attempts: { increment: 1 } } });
+      throw new BadRequestException('Invalid or expired code');
+    }
+    await this.prisma.emailCode.update({ where: { id: row.id }, data: { usedAt: new Date() } });
+    return row;
+  }
+
+  /** Email a "verify your email" code to the account's current address. */
+  async sendVerification(userId: string, force = false): Promise<{ sent: true; alreadyVerified?: true }> {
+    const user = await this.users.findById(userId);
+    if (!user) throw new UnauthorizedException('Account not found');
+    if (user.emailVerifiedAt) return { sent: true, alreadyVerified: true };
+    const code = await this.newEmailCode(userId, 'VERIFY_EMAIL', {}, force);
+    await this.mail.sendCode({ email: user.email, name: user.name }, 'verify', code);
+    return { sent: true };
+  }
+
+  async confirmVerification(userId: string, code: string): Promise<SafeUser> {
+    const user = await this.users.findById(userId);
+    if (!user) throw new UnauthorizedException('Account not found');
+    if (!user.emailVerifiedAt) await this.useEmailCode(userId, 'VERIFY_EMAIL', code);
+    const updated = user.emailVerifiedAt
+      ? user
+      : await this.prisma.user.update({ where: { id: userId }, data: { emailVerifiedAt: new Date() } });
+    return this.toSafeUser(updated);
+  }
+
+  /** Start changing email and/or phone: a code goes to the CURRENT email. */
+  async requestContactChange(userId: string, input: { email?: string; phone?: string }): Promise<{ sent: true; to: string }> {
+    const user = await this.users.findById(userId);
+    if (!user) throw new UnauthorizedException('Account not found');
+    const newEmail = input.email?.trim().toLowerCase() || null;
+    const newPhone = input.phone?.replace(/\s+/g, '') || null;
+    const emailChanges = !!newEmail && newEmail !== user.email.toLowerCase();
+    const phoneChanges = !!newPhone && newPhone !== (user.phone ?? '');
+    if (!emailChanges && !phoneChanges) throw new BadRequestException('Nothing to change');
+    if (emailChanges && (await this.prisma.user.findFirst({ where: { email: { equals: newEmail!, mode: 'insensitive' }, id: { not: userId } } }))) {
+      throw new ConflictException('That email is already used by another account');
+    }
+    if (phoneChanges && (await this.prisma.user.findFirst({ where: { phone: newPhone!, id: { not: userId } } }))) {
+      throw new ConflictException('That phone number is already used by another account');
+    }
+    const code = await this.newEmailCode(userId, 'CHANGE_CONTACT', {
+      newEmail: emailChanges ? newEmail : null,
+      newPhone: phoneChanges ? newPhone : null,
+    });
+    await this.mail.sendCode({ email: user.email, name: user.name }, 'change', code);
+    // Mask the address we sent to (e.g. an***@gmail.com).
+    const [local, domain] = user.email.split('@');
+    return { sent: true, to: `${local.slice(0, 2)}***@${domain}` };
+  }
+
+  /** Finish the change with the code from the current email. */
+  async confirmContactChange(userId: string, code: string): Promise<SafeUser> {
+    const row = await this.useEmailCode(userId, 'CHANGE_CONTACT', code);
+    const before = await this.users.findById(userId);
+    if (!before) throw new UnauthorizedException('Account not found');
+    let updated: User;
+    try {
+      updated = await this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          ...(row.newEmail ? { email: row.newEmail, emailVerifiedAt: null } : {}),
+          ...(row.newPhone ? { phone: row.newPhone } : {}),
+        },
+      });
+    } catch {
+      throw new ConflictException('That email or phone was just taken by another account');
+    }
+    if (row.newEmail) {
+      // The new address must prove itself too; the old one gets a heads-up.
+      await this.sendVerification(userId, true).catch((e) => this.logger.warn(`New-email verification not sent: ${String(e)}`));
+      await this.mail.sendNotice(
+        { email: before.email, name: before.name },
+        'Your LERNEX email was changed',
+        `The email on your LERNEX account was changed to ${row.newEmail}. If this wasn't you, reset your password right away.`,
+      );
+    }
+    return this.toSafeUser(updated);
   }
 
   // --- internals ---

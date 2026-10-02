@@ -14,6 +14,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../../context/AppContext';
+import { getLeaderboardCategoriesRequest } from '../../api/competition.api';
+import { ContactChangeSheet } from './ContactChangeSheet';
 import { Avatar } from '../common/Avatar';
 import { takePhoto, pickPhoto } from '../../services/imagePicker';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
@@ -23,7 +25,8 @@ interface EditProfileModalProps {
   onClose: () => void;
 }
 
-const SKILL_TRACKS = ['Music', 'Coding', 'Design'];
+/** Starter suggestions; real categories people already use are merged in. */
+const BASE_SUGGESTIONS = ['Music', 'Coding', 'Design', 'Dance', 'Photography', 'Fitness', 'Art', 'Writing', 'Cooking', 'Languages', 'Marketing', 'Business'];
 
 export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   visible,
@@ -33,9 +36,11 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
 
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
-  const [hobby, setHobby] = useState('Music');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
+  const [hobby, setHobby] = useState('');
+  const [customMode, setCustomMode] = useState(false);
+  const [customHobby, setCustomHobby] = useState('');
+  const [liveCategories, setLiveCategories] = useState<string[]>([]);
+  const [contactField, setContactField] = useState<'email' | 'phone' | null>(null);
   const [avatarUrl, setAvatarUrl] = useState('');
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -44,12 +49,40 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     if (user) {
       setName(user.name || '');
       setBio(user.bio || '');
-      setHobby(user.hobby || 'Music');
-      setEmail(user.email || '');
-      setPhone(user.phone || '');
+      setHobby(user.hobby || '');
+      setCustomMode(false);
+      setCustomHobby('');
       setAvatarUrl(user.avatarUrl || '');
     }
   }, [user, visible]);
+
+  // Real categories members already use (merged into the suggestions).
+  useEffect(() => {
+    if (!visible) return;
+    getLeaderboardCategoriesRequest()
+      .then((cats: any) =>
+        setLiveCategories(
+          (Array.isArray(cats) ? cats : [])
+            .map((c: any) => (typeof c === 'string' ? c : c?.name ?? c?.category))
+            .filter(Boolean),
+        ),
+      )
+      .catch(() => {});
+  }, [visible]);
+
+  const currentHobby = user?.hobby || '';
+  const suggestions = (() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    [...liveCategories, ...BASE_SUGGESTIONS].forEach((h) => {
+      const k = h.trim().toLowerCase();
+      if (!k || seen.has(k) || k === currentHobby.toLowerCase()) return;
+      seen.add(k);
+      out.push(h.trim());
+    });
+    return out.slice(0, 14);
+  })();
+  const finalHobby = customMode ? customHobby.trim() : hobby;
 
   const handlePickAvatar = async (mode: 'camera' | 'library') => {
     const res = mode === 'camera' ? await takePhoto() : await pickPhoto();
@@ -74,15 +107,17 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
       Alert.alert('Name Required', 'Please enter your full name.');
       return;
     }
+    if (finalHobby.length < 2) {
+      Alert.alert('Focus Track', 'Pick a focus track or type your own (at least 2 letters).');
+      return;
+    }
     setIsSaving(true);
     try {
-      // name, bio and avatar persist server-side; hobby is kept locally.
+      // Saved on the server. Email / phone change through the verified flow.
       await updateUser({
         name: name.trim(),
         bio: bio.trim(),
-        hobby,
-        email: email.trim(),
-        phone: phone.trim(),
+        hobby: finalHobby,
       });
       onClose();
       Alert.alert('Profile Updated! ✨', 'Your changes have been saved.');
@@ -196,57 +231,79 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                 </View>
               </View>
 
-              {/* Primary Skill Track */}
+              {/* Primary Focus Track: current + suggestions + custom */}
               <View style={styles.fieldGroup}>
                 <Text style={styles.fieldLabel}>Primary Focus Track</Text>
+                {!!currentHobby && (
+                  <Text style={styles.currentTrack}>
+                    Current: <Text style={styles.currentTrackValue}>{currentHobby}</Text>
+                  </Text>
+                )}
                 <View style={styles.tracksRow}>
-                  {SKILL_TRACKS.map((track) => {
-                    const isSelected = hobby === track;
+                  {[currentHobby, ...suggestions].filter(Boolean).map((track) => {
+                    const isSelected = !customMode && hobby.toLowerCase() === track.toLowerCase();
                     return (
                       <TouchableOpacity
                         key={track}
                         activeOpacity={0.8}
-                        onPress={() => setHobby(track)}
+                        onPress={() => {
+                          setCustomMode(false);
+                          setHobby(track);
+                        }}
                         style={[styles.trackChip, isSelected && styles.trackChipActive]}
                       >
-                        <Text style={[styles.trackChipText, isSelected && styles.trackChipTextActive]}>
-                          {track}
-                        </Text>
+                        {track === currentHobby && <Ionicons name="star" size={11} color={isSelected ? '#FFFFFF' : '#F59E0B'} />}
+                        <Text style={[styles.trackChipText, isSelected && styles.trackChipTextActive]}>{track}</Text>
                       </TouchableOpacity>
                     );
                   })}
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    onPress={() => setCustomMode(true)}
+                    style={[styles.trackChip, customMode && styles.trackChipActive]}
+                  >
+                    <Ionicons name="add" size={13} color={customMode ? '#FFFFFF' : '#4F46E5'} />
+                    <Text style={[styles.trackChipText, customMode && styles.trackChipTextActive]}>Custom</Text>
+                  </TouchableOpacity>
                 </View>
+                {customMode && (
+                  <View style={[styles.inputWrapper, { marginTop: 10 }]}>
+                    <Ionicons name="create-outline" size={16} color="#4F46E5" style={styles.fieldIcon} />
+                    <TextInput
+                      value={customHobby}
+                      onChangeText={setCustomHobby}
+                      placeholder="e.g. Classical Dance, Guitar, UI Design"
+                      placeholderTextColor="#94A3B8"
+                      maxLength={40}
+                      autoFocus
+                      style={styles.textInput}
+                    />
+                  </View>
+                )}
+                <Text style={styles.trackHint}>Your focus decides which circles we recommend.</Text>
               </View>
 
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Email Address</Text>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="mail-outline" size={16} color="#4F46E5" style={styles.fieldIcon} />
-                  <TextInput
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder="your@email.com"
-                    placeholderTextColor="#94A3B8"
-                    keyboardType="email-address"
-                    style={styles.textInput}
-                  />
+              {(['email', 'phone'] as const).map((f) => (
+                <View key={f} style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>{f === 'email' ? 'Email Address' : 'Phone Number'}</Text>
+                  <View style={styles.contactRow}>
+                    <Ionicons name={f === 'email' ? 'mail-outline' : 'call-outline'} size={16} color="#4F46E5" />
+                    <Text style={styles.contactValue} numberOfLines={1}>
+                      {(f === 'email' ? user?.email : user?.phone) || 'Not set'}
+                    </Text>
+                    {f === 'email' && (
+                      <View style={[styles.verifyBadge, !user?.emailVerified && styles.verifyBadgeWarn]}>
+                        <Text style={[styles.verifyBadgeText, !user?.emailVerified && styles.verifyBadgeWarnText]}>
+                          {user?.emailVerified ? 'Verified' : 'Unverified'}
+                        </Text>
+                      </View>
+                    )}
+                    <TouchableOpacity onPress={() => setContactField(f)} style={styles.changeBtn}>
+                      <Text style={styles.changeText}>Change</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Phone Number</Text>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="call-outline" size={16} color="#4F46E5" style={styles.fieldIcon} />
-                  <TextInput
-                    value={phone}
-                    onChangeText={setPhone}
-                    placeholder="+91 98765 43210"
-                    placeholderTextColor="#94A3B8"
-                    keyboardType="phone-pad"
-                    style={styles.textInput}
-                  />
-                </View>
-              </View>
+              ))}
             </View>
 
             {/* Bottom Save Button */}
@@ -271,11 +328,33 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
           </ScrollView>
         </View>
       </View>
+      <ContactChangeSheet visible={!!contactField} field={contactField ?? 'email'} onClose={() => setContactField(null)} />
     </Modal>
   );
 };
 
 const styles = StyleSheet.create({
+  currentTrack: { fontSize: 12, color: '#64748B', marginBottom: 8 },
+  currentTrackValue: { fontWeight: '800', color: '#0F172A' },
+  trackHint: { fontSize: 11, color: '#94A3B8', marginTop: 8 },
+  contactRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: '#F8FAFC',
+  },
+  contactValue: { flex: 1, fontSize: 14, color: '#0F172A', fontWeight: '600' },
+  verifyBadge: { backgroundColor: '#DCFCE7', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 999 },
+  verifyBadgeText: { fontSize: 10, fontWeight: '800', color: '#15803D' },
+  verifyBadgeWarn: { backgroundColor: '#FEF3C7' },
+  verifyBadgeWarnText: { color: '#B45309' },
+  changeBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, backgroundColor: '#EEF2FF' },
+  changeText: { fontSize: 12, fontWeight: '800', color: '#4F46E5' },
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(15, 23, 42, 0.6)',
@@ -462,29 +541,31 @@ const styles = StyleSheet.create({
   },
   tracksRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
   trackChip: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-    paddingVertical: 9,
-    borderRadius: borderRadius.lg,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 8,
+    paddingHorizontal: 13,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
   trackChipActive: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#4F46E5',
     borderColor: '#4F46E5',
   },
   trackChipText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
+    fontWeight: '700',
+    color: '#475569',
   },
   trackChipTextActive: {
-    color: '#4F46E5',
-    fontWeight: 'bold',
+    color: '#FFFFFF',
   },
   submitBtn: {
     borderRadius: borderRadius.xl,

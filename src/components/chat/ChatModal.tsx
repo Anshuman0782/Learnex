@@ -76,6 +76,7 @@ export const ChatModal: React.FC = () => {
   // ---- thread ----
   const [conv, setConv] = useState<Conversation | null>(null);
   const { startCall } = useCall();
+  const { openUserProfile } = useApp();
   const [peer, setPeer] = useState<ChatPeer | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]); // newest first (inverted list)
   const [hasMore, setHasMore] = useState(false);
@@ -369,6 +370,21 @@ export const ChatModal: React.FC = () => {
 
           {isThread && peer ? (
             <View style={styles.peerBox}>
+              {/* Tap the person → their profile (opens over the chat) */}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() =>
+                  openUserProfile({
+                    id: peer.id,
+                    name: peer.name,
+                    avatarUrl: peer.avatarUrl ?? '',
+                    role: (peer.role ?? undefined) as any,
+                    badge: peer.role === 'Mentor' ? 'Verified Mentor' : 'Community Member',
+                  })
+                }
+                style={styles.peerTap}
+                accessibilityLabel={`Open ${peer.name}'s profile`}
+              >
               <Avatar uri={peer.avatarUrl} name={peer.name} size={38} showOnlineDot={!!conv?.otherUser.isOnline} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.peerName} numberOfLines={1}>{peer.name}</Text>
@@ -376,6 +392,7 @@ export const ChatModal: React.FC = () => {
                   {conv?.otherUser.isOnline ? 'Online' : peer.role === 'Mentor' ? 'Mentor' : 'Learner'}
                 </Text>
               </View>
+              </TouchableOpacity>
               {/* Calls: only between people who follow each other (server-enforced too). */}
               {FEATURES.calls && conv?.otherUser.canCall && (
                 <>
@@ -558,6 +575,7 @@ const styles = StyleSheet.create({
   headerBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { flex: 1, fontSize: 20, fontWeight: '800', color: '#0F172A' },
   peerBox: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  peerTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   callBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
   peerName: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
   peerSub: { fontSize: 11, color: '#16A34A', fontWeight: '600' },
