@@ -8,6 +8,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
 import { DEFAULT_USER_STATS } from '../../data/mockData';
@@ -23,6 +24,7 @@ export const PersonalStatsDashboard: React.FC<PersonalStatsDashboardProps> = ({
   onAnalyticsPress,
 }) => {
   const { user, selectedRole, userStats } = useApp();
+  const insets = useSafeAreaInsets();
   const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
 
   // Real stats from the backend; fall back to a zeroed shape while loading.
@@ -171,7 +173,7 @@ export const PersonalStatsDashboard: React.FC<PersonalStatsDashboardProps> = ({
         onRequestClose={() => setIsAnalyticsModalOpen(false)}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, spacing.xl - 8) + 8 }]}>
             <View style={styles.modalHandle} />
 
             <View style={styles.modalHeaderRow}>

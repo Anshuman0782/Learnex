@@ -16,9 +16,11 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useVideoPlayer, VideoView, type VideoPlayer } from 'expo-video';
+import { useVideoFit } from '../../hooks/useVideoFit';
 import { useApp } from '../../context/AppContext';
 import { followUserRequest, unfollowUserRequest } from '../../api/social.api';
 import { Avatar } from '../../components/common/Avatar';
@@ -156,7 +158,22 @@ export const FeedPlaceholderScreen: React.FC = () => {
   const viewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Real follow state keyed by the author's user id.
+  // Local overrides on top of the server's `authorFollowed` (after a tap).
   const [followedIds, setFollowedIds] = useState<Record<string, boolean>>({});
+  // Just followed → show a ✓ briefly, then the button disappears (Instagram-style).
+  const [justFollowed, setJustFollowed] = useState<Record<string, boolean>>({});
+  // Reels whose long description is expanded ("more").
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const tabBarHeight = useBottomTabBarHeight();
+  // Gentle slide-in each time Reels opens (pairs with Home's swipe-out).
+  const enterAnim = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    const unsub = navigation.addListener('focus', () => {
+      enterAnim.setValue(0);
+      Animated.timing(enterAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    });
+    return unsub;
+  }, [navigation, enterAnim]);
   const [toast, setToast] = useState<string | null>(null);
   const toastAnim = useRef(new Animated.Value(0)).current;
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -181,9 +198,14 @@ export const FeedPlaceholderScreen: React.FC = () => {
       showToast("That's you 🙂");
       return;
     }
-    const currently = !!followedIds[item.authorId];
+    const currently = followedIds[item.authorId] ?? !!item.authorFollowed;
     const next = !currently;
     setFollowedIds((prev) => ({ ...prev, [item.authorId as string]: next }));
+    if (next) {
+      const id = item.authorId as string;
+      setJustFollowed((prev) => ({ ...prev, [id]: true }));
+      setTimeout(() => setJustFollowed((prev) => ({ ...prev, [id]: false })), 1500);
+    }
     showToast(next ? `You're now following ${item.authorName}` : `Unfollowed ${item.authorName}`);
     try {
       if (next) await followUserRequest(item.authorId);
@@ -252,6 +274,8 @@ export const FeedPlaceholderScreen: React.FC = () => {
   }).current;
 
   const activeReel = reels[activeReelIndex];
+  // Vertical videos fill the screen; other shapes show whole (never cropped).
+  const videoFit = useVideoFit(player, activeReel?.videoUrl);
   const activeIsAudio =
     !!activeReel && (activeReel.postType === 'audio' || (!!activeReel.audioUrl && !activeReel.videoUrl));
 
@@ -365,8 +389,14 @@ export const FeedPlaceholderScreen: React.FC = () => {
   };
 
   return (
-    <View
-      style={styles.container}
+    <Animated.View
+      style={[
+        styles.container,
+        {
+          opacity: enterAnim,
+          transform: [{ translateX: enterAnim.interpolate({ inputRange: [0, 1], outputRange: [40, 0] }) }],
+        },
+      ]}
       {...panResponder.panHandlers}
       onLayout={(e) => {
         const h = e.nativeEvent.layout.height;
@@ -423,7 +453,7 @@ export const FeedPlaceholderScreen: React.FC = () => {
       <VideoView
         player={player}
         style={styles.reelBgVideo}
-        contentFit="cover"
+        contentFit={videoFit}
         nativeControls={false}
         pointerEvents="none"
       />
@@ -448,7 +478,10 @@ export const FeedPlaceholderScreen: React.FC = () => {
           viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
           renderItem={({ item, index }) => {
             const isSaved = !!item.isSaved;
-            const isFollowing = item.authorId ? !!followedIds[item.authorId] : false;
+            const isFollowing = item.authorId
+              ? followedIds[item.authorId] ?? !!item.authorFollowed
+              : false;
+            const showFollow = !isFollowing || (!!item.authorId && !!justFollowed[item.authorId]);
             const isSelfAuthor = !!item.authorId && item.authorId === user?.id;
             const mentorCritique = item.comments?.find((c) => c.isMentorCritique || c.commentType === 'mentor');
             const mentorCritiqueCount = item.mentorCritiqueCount || item.comments?.filter((c) => c.isMentorCritique).length || 0;
@@ -464,10 +497,51 @@ export const FeedPlaceholderScreen: React.FC = () => {
                   onSingleTap={toggleActivePause}
                 />
 
-                {/* ================= RIGHT ACTION DOCK (INSTAGRAM REELS STYLE) ================= */}
-                <View style={styles.actionDock}>
-                  {/* Author Avatar with Follow Pill */}
-                  <View style={styles.avatarDockItem}>
+                {/* Soft bottom fade so white text stays readable on bright videos */}
+                <LinearGradient
+                  pointerEvents="none"
+                  colors={['transparent', 'rgba(0,0,0,0.55)']}
+                  style={[styles.bottomFade, { height: tabBarHeight + 220 }]}
+                />
+
+                {/* ================= RIGHT ACTIONS (Instagram style) ================= */}
+                <View style={[styles.actionDock, { bottom: tabBarHeight + 18 }]}>
+                  <TouchableOpacity activeOpacity={0.7} onPress={() => toggleLikePost(item.id)} style={styles.dockBtn}>
+                    <Ionicons name={item.isLiked ? 'heart' : 'heart-outline'} size={30} color={item.isLiked ? '#FF3B5C' : '#FFFFFF'} style={styles.iconShadow} />
+                    <Text style={styles.dockCountText}>{item.likesCount}</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity activeOpacity={0.7} onPress={() => setCommentsPost(item)} style={styles.dockBtn}>
+                    <Ionicons name="chatbubble-outline" size={27} color="#FFFFFF" style={styles.iconShadow} />
+                    <Text style={styles.dockCountText}>{item.commentsCount || 0}</Text>
+                    {mentorCritiqueCount > 0 && <Text style={styles.mentorMiniSub}>{mentorCritiqueCount} ★</Text>}
+                  </TouchableOpacity>
+
+                  <TouchableOpacity activeOpacity={0.7} onPress={() => pressRepost(item)} style={styles.dockBtn}>
+                    <MaterialCommunityIcons name="repeat-variant" size={30} color={item.isReposted ? '#4ADE80' : '#FFFFFF'} style={styles.iconShadow} />
+                    <Text style={[styles.dockCountText, item.isReposted && { color: '#4ADE80' }]}>{item.repostsCount ?? 0}</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity activeOpacity={0.7} onPress={() => handleShare(item)} style={styles.dockBtn}>
+                    <Ionicons name="paper-plane-outline" size={26} color="#FFFFFF" style={styles.iconShadow} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      toggleSavePost(item.id);
+                      showToast(!isSaved ? 'Saved 🔖' : 'Removed from saved');
+                    }}
+                    style={styles.dockBtn}
+                  >
+                    <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={26} color={isSaved ? '#F59E0B' : '#FFFFFF'} style={styles.iconShadow} />
+                  </TouchableOpacity>
+                </View>
+
+                {/* ================= BOTTOM INFO (Instagram style) ================= */}
+                <View style={[styles.bottomContentOverlay, { paddingBottom: tabBarHeight + 14 }]}>
+                  {/* Avatar · name · Follow */}
+                  <View style={styles.authorRow}>
                     <TouchableOpacity
                       activeOpacity={0.8}
                       onPress={() =>
@@ -480,240 +554,64 @@ export const FeedPlaceholderScreen: React.FC = () => {
                           badge: item.authorRole === 'Mentor' ? 'Verified Mentor' : 'Community Member',
                         })
                       }
-                      style={styles.dockAvatarBorder}
+                      style={styles.authorTap}
                     >
-                      <Avatar
-                        uri={item.authorAvatar}
-                        name={item.authorName}
-                        size={46}
-                        showRing={item.authorRole === 'Mentor'}
-                      />
+                      <Avatar uri={item.authorAvatar} name={item.authorName} size={34} showRing={item.authorRole === 'Mentor'} />
+                      <Text style={styles.authorNameReels} numberOfLines={1}>{item.authorName}</Text>
+                      {item.authorRole === 'Mentor' && <Ionicons name="checkmark-circle" size={15} color="#A78BFA" />}
                     </TouchableOpacity>
-
-                    {!isSelfAuthor && (
+                    {!isSelfAuthor && showFollow && (
                       <TouchableOpacity
                         activeOpacity={0.8}
+                        disabled={isFollowing}
                         onPress={() => handleFollowAuthor(item)}
-                        style={[styles.followPlusBtn, isFollowing && styles.followPlusBtnActive]}
+                        style={[styles.followPill, isFollowing && styles.followPillDone]}
                       >
-                        <Ionicons
-                          name={isFollowing ? 'checkmark' : 'add'}
-                          size={13}
-                          color="#FFFFFF"
-                        />
+                        {isFollowing ? (
+                          <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                        ) : (
+                          <Text style={styles.followPillText}>Follow</Text>
+                        )}
                       </TouchableOpacity>
                     )}
                   </View>
 
-                  {/* Like Button */}
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => toggleLikePost(item.id)}
-                    style={styles.dockBtn}
-                  >
-                    <View style={[styles.dockIconCircle, item.isLiked && styles.dockIconLikedCircle]}>
-                      <Ionicons
-                        name={item.isLiked ? 'heart' : 'heart-outline'}
-                        size={25}
-                        color={item.isLiked ? '#EF4444' : '#FFFFFF'}
-                      />
-                    </View>
-                    <Text style={[styles.dockCountText, item.isLiked && styles.dockCountLikedText]}>
-                      {item.likesCount}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* Comment Button — opens the comments-only sheet */}
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => setCommentsPost(item)}
-                    style={styles.dockBtn}
-                  >
-                    <View style={styles.dockIconCircle}>
-                      <Ionicons name="chatbubble-ellipses" size={24} color="#FFFFFF" />
-                      {mentorCritiqueCount > 0 && (
-                        <View style={styles.mentorMiniBadge}>
-                          <Ionicons name="star" size={9} color="#FFFFFF" />
-                        </View>
-                      )}
-                    </View>
-                    <Text style={styles.dockCountText}>{item.commentsCount || 0}</Text>
-                    {mentorCritiqueCount > 0 && (
-                      <Text style={styles.mentorMiniSub}>{mentorCritiqueCount} ★</Text>
-                    )}
-                  </TouchableOpacity>
-
-                  {/* Save / Bookmark Button */}
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => {
-                      toggleSavePost(item.id);
-                      Alert.alert(
-                        !isSaved ? 'Saved to Vault 🔖' : 'Removed from Vault',
-                        !isSaved
-                          ? 'This practice reel was saved to your private library.'
-                          : 'Removed from your saved collection.'
-                      );
-                    }}
-                    style={styles.dockBtn}
-                  >
-                    <View style={[styles.dockIconCircle, isSaved && styles.dockIconSavedCircle]}>
-                      <Ionicons
-                        name={isSaved ? 'bookmark' : 'bookmark-outline'}
-                        size={23}
-                        color={isSaved ? '#F59E0B' : '#FFFFFF'}
-                      />
-                    </View>
-                    <Text style={[styles.dockCountText, isSaved && { color: '#F59E0B' }]}>
-                      {isSaved ? 'Saved' : 'Save'}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* Repost Button */}
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => pressRepost(item)}
-                    style={styles.dockBtn}
-                  >
-                    <View style={[styles.dockIconCircle, item.isReposted && styles.dockIconRepostedCircle]}>
-                      <MaterialCommunityIcons name="repeat" size={24} color={item.isReposted ? '#16A34A' : '#FFFFFF'} />
-                    </View>
-                    <Text style={[styles.dockCountText, item.isReposted && { color: '#4ADE80' }]}>
-                      {item.repostsCount ?? 0}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* Share Button */}
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => handleShare(item)}
-                    style={styles.dockBtn}
-                  >
-                    <View style={styles.dockIconCircle}>
-                      <Ionicons name="paper-plane" size={22} color="#FFFFFF" />
-                    </View>
-                    <Text style={styles.dockCountText}>Share</Text>
-                  </TouchableOpacity>
-
-                  {/* Spinning Vinyl Audio Record */}
-                  <View style={styles.spinningVinylBox}>
-                    <LinearGradient
-                      colors={['#1E293B', '#0F172A']}
-                      style={styles.vinylCircle}
-                    >
-                      <Avatar
-                        uri={item.authorAvatar}
-                        name={item.authorName}
-                        size={22}
-                        showRing={false}
-                      />
-                    </LinearGradient>
-                  </View>
-                </View>
-
-                {/* ================= BOTTOM LEFT CONTENT & PRACTICE OVERLAY ================= */}
-                <View
-                  style={[
-                    styles.bottomContentOverlay,
-                    { paddingBottom: Math.max(insets.bottom + 75, 95) },
-                  ]}
-                >
-                  {/* Origin Community Pill */}
-                  <View style={styles.commPillRow}>
-                    <View style={styles.commOriginPill}>
-                      <Ionicons name="people" size={11} color="#4F46E5" />
-                      <Text style={styles.commOriginText} numberOfLines={1}>
-                        {item.communityName}
-                      </Text>
-                    </View>
-
-                    <View style={styles.reelTagPill}>
-                      <Text style={styles.reelTagText}>{item.tag || '#Practice'}</Text>
-                    </View>
-                  </View>
-
-                  {/* Author Handle & Role */}
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    onPress={() =>
-                      openUserProfile({
-                        id: item.authorId,
-                        name: item.authorName,
-                        avatarUrl: item.authorAvatar,
-                        role: item.authorRole,
-                        specialty: item.authorSkill,
-                        badge: item.authorRole === 'Mentor' ? 'Verified Mentor' : 'Community Member',
-                      })
-                    }
-                    style={styles.authorHandleRow}
-                  >
-                    <Text style={styles.authorNameReels}>{item.authorName}</Text>
-                    {item.authorRole === 'Mentor' ? (
-                      <View style={styles.mentorVerifiedChip}>
-                        <Ionicons name="star" size={10} color="#7C3AED" />
-                        <Text style={styles.mentorVerifiedChipText}>Verified Mentor</Text>
-                      </View>
-                    ) : (
-                      <View style={styles.learnerChip}>
-                        <Text style={styles.learnerChipText}>Learner</Text>
-                      </View>
-                    )}
-                    <Text style={styles.timeAgoReels}>• {item.timeAgo}</Text>
-                  </TouchableOpacity>
-
-                  {/* Reel Video Title */}
-                  {item.videoTitle && (
-                    <Text style={styles.videoTitleReels} numberOfLines={1}>
+                  {/* Title (highlighted) */}
+                  {!!item.videoTitle && (
+                    <Text style={styles.videoTitleReels} numberOfLines={2}>
                       {item.videoTitle}
                     </Text>
                   )}
 
-                  {/* Post Caption / Question */}
-                  <Text style={styles.captionReels} numberOfLines={2}>
-                    {item.content}
-                  </Text>
-
-                  {/* Inline Verified Mentor Critique Highlight (If reviewed) */}
-                  {mentorCritique && (
+                  {/* Description with "more" */}
+                  {!!item.content && item.content !== item.videoTitle && (
                     <TouchableOpacity
                       activeOpacity={0.85}
-                      onPress={() => setCommentsPost(item)}
-                      style={styles.mentorCritiquePreviewBox}
+                      onPress={() => setExpanded((e) => ({ ...e, [item.id]: !e[item.id] }))}
                     >
-                      <View style={styles.mentorPreviewTop}>
-                        <View style={styles.mentorPreviewBadge}>
-                          <Ionicons name="star" size={11} color="#D97706" />
-                          <Text style={styles.mentorPreviewBadgeText}>
-                            MENTOR CRITIQUE ({mentorCritique.mentorRating || 5}.0 ★)
-                          </Text>
-                        </View>
-                        <Text style={styles.watchFixPrompt}>Tap to Watch Fix ▶</Text>
-                      </View>
-                      <Text style={styles.mentorPreviewText} numberOfLines={1}>
-                        "{mentorCritique.text}"
+                      <Text style={styles.captionReels} numberOfLines={expanded[item.id] ? 8 : 2}>
+                        {item.content}
                       </Text>
+                      {item.content.length > 90 && (
+                        <Text style={styles.moreText}>{expanded[item.id] ? 'less' : 'more'}</Text>
+                      )}
                     </TouchableOpacity>
                   )}
 
-                  {/* Audio Track & Dynamic Waveform Bar */}
-                  <View style={styles.audioWaveformRow}>
-                    <Ionicons name="musical-note" size={12} color="#38BDF8" />
-                    <Text style={styles.audioTrackName} numberOfLines={1}>
-                      Original Practice Audio • {item.authorName} ({item.videoDuration || '0:45'})
-                    </Text>
-
-                    {/* Mini Waveform Bars */}
-                    <View style={styles.miniWaveformBars}>
-                      {WAVEFORM_HEIGHTS.slice(0, 10).map((h, i) => (
-                        <View
-                          key={i}
-                          style={[
-                            styles.miniWaveBar,
-                            { height: (h % 14) + 4 },
-                          ]}
-                        />
-                      ))}
-                    </View>
+                  {/* Circle · mentor critique */}
+                  <View style={styles.metaRow}>
+                    {!!item.communityName && (
+                      <View style={styles.circleChip}>
+                        <Ionicons name="people" size={11} color="#FFFFFF" />
+                        <Text style={styles.circleChipText} numberOfLines={1}>{item.communityName}</Text>
+                      </View>
+                    )}
+                    {mentorCritique && (
+                      <TouchableOpacity activeOpacity={0.85} onPress={() => setCommentsPost(item)} style={styles.critiqueChip}>
+                        <Ionicons name="star" size={11} color="#FBBF24" />
+                        <Text style={styles.critiqueChipText}>Mentor critique · {mentorCritique.mentorRating || 5}.0</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
               </View>
@@ -737,7 +635,7 @@ export const FeedPlaceholderScreen: React.FC = () => {
         post={commentsPost}
         onClose={() => setCommentsPost(null)}
       />
-    </View>
+    </Animated.View>
   );
 };
 
@@ -762,7 +660,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 20,
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    backgroundColor: 'transparent',
     paddingHorizontal: spacing.base,
     paddingBottom: spacing.xs,
   },
@@ -928,12 +826,42 @@ const styles = StyleSheet.create({
   },
   actionDock: {
     position: 'absolute',
-    right: 12,
+    right: 10,
     bottom: 115,
     alignItems: 'center',
-    gap: 14,
+    gap: 20,
     zIndex: 10,
   },
+  bottomFade: { position: 'absolute', left: 0, right: 0, bottom: 0, zIndex: 5 },
+  iconShadow: { textShadowColor: 'rgba(0,0,0,0.45)', textShadowRadius: 6, textShadowOffset: { width: 0, height: 1 } },
+  authorRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  authorTap: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+  followPill: { borderWidth: 1.2, borderColor: '#FFFFFF', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 4 },
+  followPillDone: { backgroundColor: 'rgba(255,255,255,0.25)', borderColor: 'transparent' },
+  followPillText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  moreText: { color: 'rgba(255,255,255,0.75)', fontSize: 13, fontWeight: '700', marginTop: 1 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+  circleChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+    maxWidth: 180,
+  },
+  circleChipText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700', flexShrink: 1 },
+  critiqueChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  critiqueChipText: { color: '#FDE68A', fontSize: 11, fontWeight: '700' },
   avatarDockItem: {
     alignItems: 'center',
     position: 'relative',
@@ -1026,9 +954,9 @@ const styles = StyleSheet.create({
   bottomContentOverlay: {
     position: 'absolute',
     left: 14,
-    right: 80,
+    right: 72,
     bottom: 0,
-    gap: 6,
+    gap: 7,
     zIndex: 10,
   },
   commPillRow: {
@@ -1068,7 +996,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   authorNameReels: {
-    fontSize: 14,
+    fontSize: 15,
+    flexShrink: 1,
     fontWeight: typography.weights.bold,
     color: '#FFFFFF',
     textShadowColor: 'rgba(0, 0, 0, 0.75)',
@@ -1105,17 +1034,18 @@ const styles = StyleSheet.create({
     color: '#CBD5E1',
   },
   videoTitleReels: {
-    fontSize: 14,
-    fontWeight: typography.weights.bold,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: '800',
     color: '#FFFFFF',
     textShadowColor: 'rgba(0, 0, 0, 0.8)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
   },
   captionReels: {
-    fontSize: 12,
-    color: '#E2E8F0',
-    lineHeight: 17,
+    fontSize: 13.5,
+    color: '#F1F5F9',
+    lineHeight: 19,
     textShadowColor: 'rgba(0, 0, 0, 0.8)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,

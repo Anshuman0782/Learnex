@@ -38,6 +38,7 @@ import {
 } from '../../services/imagePicker';
 import { uploadFileRequest } from '../../api/media.api';
 import * as FileSystem from 'expo-file-system/legacy';
+import { ScheduleSheet } from '../../components/common/ScheduleSheet';
 import { POST_BACKGROUNDS, postBackground, type PostBgKey } from '../../config/postBackgrounds';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 
@@ -75,6 +76,7 @@ export const AddContentPlaceholderScreen: React.FC = () => {
     saveUserGoal,
     logGoalSession,
     activeGoal,
+    user,
   } = useApp();
 
   const joinedCommunityObjects = getJoinedCommunityObjects();
@@ -187,7 +189,7 @@ export const AddContentPlaceholderScreen: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presetCircleId]);
 
-  const [selectedTags, setSelectedTags] = useState<string[]>(['#VocalPitch']);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [isPublishing, setIsPublishing] = useState(false);
 
   // --- Real media capture state ---
@@ -507,7 +509,8 @@ export const AddContentPlaceholderScreen: React.FC = () => {
         bgStyle: contentType === 'text' ? bgKey : undefined,
         communityIds: isShort ? selectedCommunityIds : selectedCommunityIds,
         communityId: selectedCommunityIds[0],
-        tag: selectedTags.join(' ') || '#PracticeVideo',
+        // Tag = the creator's own focus (e.g. #Dance) — no made-up default.
+        tag: selectedTags.join(' ') || (user?.hobby ? `#${user.hobby.replace(/\s+/g, '')}` : ''),
         tags: selectedTags,
         postType,
         videoUrl,
@@ -1221,54 +1224,6 @@ export const AddContentPlaceholderScreen: React.FC = () => {
               </ScrollView>
             </View>
 
-            {/* Skill Focus & Technique Area Section */}
-            <View style={styles.sectionContainer}>
-              <Text style={styles.sectionHeader}>Skill Focus & Technique Area</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.chipsScroll}
-              >
-                {QUICK_TAGS.map((t) => {
-                  const isSelected = selectedTags.includes(t.label);
-                  return (
-                    <TouchableOpacity
-                      key={t.label}
-                      activeOpacity={0.8}
-                      onPress={() => handleToggleTag(t.label)}
-                      style={[styles.commChip, isSelected && styles.commChipSelected]}
-                    >
-                      <Ionicons
-                        name={t.icon as any}
-                        size={13}
-                        color={isSelected ? '#4F46E5' : '#64748B'}
-                      />
-                      <Text
-                        style={[
-                          styles.commChipText,
-                          isSelected && styles.commChipTextSelected,
-                        ]}
-                      >
-                        {t.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-
-              {/* Custom Skill Focus Area Input */}
-              <View style={[styles.inputWrapper, { marginTop: 6 }]}>
-                <Ionicons name="sparkles-outline" size={16} color="#7C3AED" style={styles.inputIcon} />
-                <TextInput
-                  value={customFocusArea}
-                  onChangeText={setCustomFocusArea}
-                  placeholder="Custom technique focus (e.g. High C5 Phonation, Tremolo Picking)"
-                  placeholderTextColor="#94A3B8"
-                  style={styles.textInput}
-                />
-              </View>
-            </View>
-
             {/* Sharing / visibility — Public · Private · Schedule */}
             <View style={styles.sectionContainer}>
               <Text style={styles.sectionHeader}>Visibility</Text>
@@ -1407,126 +1362,17 @@ export const AddContentPlaceholderScreen: React.FC = () => {
         )}
       </ScrollView>
 
-      {/* Dynamic Schedule Date & Time Picker */}
-      <Modal
+      {/* Schedule: calendar → time (two clear steps) */}
+      <ScheduleSheet
         visible={showSchedulePicker}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowSchedulePicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.datePickerSheet}>
-            <View style={styles.dragHandle} />
-            <View style={styles.datePickerHeader}>
-              <View>
-                <Text style={styles.datePickerTitle}>Schedule Publish Time</Text>
-                <Text style={styles.datePickerSub}>Pick any future date and time</Text>
-              </View>
-              <TouchableOpacity onPress={() => setShowSchedulePicker(false)} style={styles.closePickerBtn}>
-                <Ionicons name="close" size={20} color="#64748B" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.selectedDateBanner}>
-              <Ionicons name="time" size={18} color="#16A34A" />
-              <Text style={styles.selectedDateText}>
-                {new Date(schedYear, schedMonth, schedDay, schedHour, schedMinute).toLocaleString([], {
-                  weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
-                })}
-              </Text>
-            </View>
-
-            {/* Date row: Year / Month / Day */}
-            <View style={styles.dateColumnsWrapper}>
-              <View style={styles.dateColumn}>
-                <Text style={styles.columnLabel}>Year</Text>
-                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
-                  {Array.from({ length: 3 }, (_, i) => new Date().getFullYear() + i).map((y) => {
-                    const isActive = schedYear === y;
-                    return (
-                      <TouchableOpacity key={y} onPress={() => setSchedYear(y)} style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}>
-                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>{y}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-              <View style={styles.dateColumn}>
-                <Text style={styles.columnLabel}>Month</Text>
-                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
-                  {SCHED_MONTH_NAMES.map((name, idx) => {
-                    const isActive = schedMonth === idx;
-                    return (
-                      <TouchableOpacity
-                        key={name}
-                        onPress={() => {
-                          setSchedMonth(idx);
-                          const maxD = new Date(schedYear, idx + 1, 0).getDate();
-                          if (schedDay > maxD) setSchedDay(maxD);
-                        }}
-                        style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}
-                      >
-                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>{name}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-              <View style={styles.dateColumn}>
-                <Text style={styles.columnLabel}>Day</Text>
-                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
-                  {Array.from({ length: daysInSchedMonth }, (_, i) => i + 1).map((d) => {
-                    const isActive = schedDay === d;
-                    return (
-                      <TouchableOpacity key={d} onPress={() => setSchedDay(d)} style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}>
-                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>{String(d).padStart(2, '0')}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            </View>
-
-            {/* Time row: Hour / Minute */}
-            <View style={styles.dateColumnsWrapper}>
-              <View style={styles.dateColumn}>
-                <Text style={styles.columnLabel}>Hour</Text>
-                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
-                  {Array.from({ length: 24 }, (_, i) => i).map((h) => {
-                    const isActive = schedHour === h;
-                    const label = `${((h % 12) || 12)}:00 ${h < 12 ? 'AM' : 'PM'}`;
-                    return (
-                      <TouchableOpacity key={h} onPress={() => setSchedHour(h)} style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}>
-                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>{label}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-              <View style={styles.dateColumn}>
-                <Text style={styles.columnLabel}>Minute</Text>
-                <ScrollView style={styles.columnScroll} showsVerticalScrollIndicator={false}>
-                  {Array.from({ length: 12 }, (_, i) => i * 5).map((m) => {
-                    const isActive = schedMinute === m;
-                    return (
-                      <TouchableOpacity key={m} onPress={() => setSchedMinute(m)} style={[styles.dateOptionBtn, isActive && styles.dateOptionBtnActive]}>
-                        <Text style={[styles.dateOptionText, isActive && styles.dateOptionTextActive]}>:{String(m).padStart(2, '0')}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </View>
-            </View>
-
-            <TouchableOpacity activeOpacity={0.88} onPress={applySchedulePicker} style={styles.applyDateBtn}>
-              <LinearGradient colors={['#16A34A', '#15803D']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.applyDateGradient}>
-                <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-                <Text style={styles.applyDateText}>Set Schedule Time</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+        initial={scheduledAt}
+        onClose={() => setShowSchedulePicker(false)}
+        onConfirm={(d) => {
+          setScheduledAt(d);
+          setScheduleMode(true);
+          setShowSchedulePicker(false);
+        }}
+      />
 
       {/* Interactive Goal Date Picker Modal Sheet */}
       <Modal
@@ -1536,7 +1382,7 @@ export const AddContentPlaceholderScreen: React.FC = () => {
         onRequestClose={() => setShowGoalDatePickerModal(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.datePickerSheet}>
+          <View style={[styles.datePickerSheet, { paddingBottom: Math.max(insets.bottom, spacing.base - 8) + 8 }]}>
             <View style={styles.dragHandle} />
             <View style={styles.datePickerHeader}>
               <View>

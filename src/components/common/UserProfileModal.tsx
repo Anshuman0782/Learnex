@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { UserRole, CommunityPost } from '../../types';
 import { postKind, isMediaPost, postCover, POST_KIND_ICON } from '../../utils/postKind';
 import { Avatar } from './Avatar';
@@ -63,6 +64,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   onClose,
 }) => {
   const { showDialog, openChatWith } = useApp();
+  const insets = useSafeAreaInsets();
   const [isBookingOpen, setIsBookingOpen] = useState(false);
 
   const [profile, setProfile] = useState<PublicProfile | null>(null);
@@ -234,7 +236,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.modalSheet}>
+        <View style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, spacing.xl - 8) + 8 }]}>
           {/* Drag Handle */}
           <View style={styles.dragHandle} />
 
@@ -558,7 +560,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
           {/* ================= MODAL 1: BOOK SESSION SHEET ================= */}
           <Modal visible={isBookingOpen} animationType="slide" transparent onRequestClose={() => setIsBookingOpen(false)}>
             <View style={styles.innerBackdrop}>
-              <View style={styles.innerSheet}>
+              <View style={[styles.innerSheet, { paddingBottom: Math.max(insets.bottom, (Platform.OS === 'ios' ? spacing.xl : spacing.lg) - 8) + 8 }]}>
                 <View style={styles.dragHandle} />
                 <View style={styles.innerHeaderRow}>
                   <Text style={styles.innerTitle}>Book Mentorship Session</Text>

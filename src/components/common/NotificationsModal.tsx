@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AppNotification } from '../../api/notifications.api';
 import { typography, spacing, borderRadius, shadows } from '../../theme';
 
@@ -40,6 +41,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   onDelete,
   onClearAll,
 }) => {
+  const insets = useSafeAreaInsets();
   const [menuFor, setMenuFor] = useState<AppNotification | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   // Remember what was unread when the sheet opened, so it stays under "New"
@@ -87,7 +89,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.xl - 8) + 8 }]}>
           <View style={styles.dragHandle} />
           <View style={styles.headerRow}>
             <Text style={styles.title}>Notifications</Text>
@@ -126,7 +128,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
 
           {/* Press-and-hold options */}
           {menuFor && (
-            <Pressable style={styles.menuBackdrop} onPress={() => setMenuFor(null)}>
+            <Pressable style={[styles.menuBackdrop, { paddingBottom: Math.max(insets.bottom, 4) + 8 }]} onPress={() => setMenuFor(null)}>
               <Pressable style={styles.menu} onPress={() => undefined}>
                 <Text style={styles.menuTitle} numberOfLines={1}>{menuFor.title}</Text>
                 {onOpen && (
@@ -175,7 +177,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
 
           {/* Confirm clear all */}
           {confirmClear && (
-            <Pressable style={styles.menuBackdrop} onPress={() => setConfirmClear(false)}>
+            <Pressable style={[styles.menuBackdrop, { paddingBottom: Math.max(insets.bottom, 4) + 8 }]} onPress={() => setConfirmClear(false)}>
               <Pressable style={styles.menu} onPress={() => undefined}>
                 <Text style={styles.confirmTitle}>Clear all notifications?</Text>
                 <Text style={styles.confirmText}>This removes your whole notification history. It can’t be undone.</Text>

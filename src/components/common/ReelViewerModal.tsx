@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { useVideoFit } from '../../hooks/useVideoFit';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from './Avatar';
 import { MusicAnimation } from './NowPlayingBar';
@@ -190,6 +191,8 @@ export const ReelViewerModal: React.FC<ReelViewerModalProps> = ({
   }, [visible, startIndex]);
 
   const activeReel = data[activeIndex];
+  // Vertical videos fill the screen; other shapes show whole (never cropped).
+  const videoFit = useVideoFit(player, activeReel?.videoUrl);
   const activeIsAudio =
     !!activeReel && (activeReel.postType === 'audio' || (!!activeReel.audioUrl && !activeReel.videoUrl));
   const isThisAudioActive = !!activeReel && audioPost?.id === activeReel.id && isAudioPlaying;
@@ -337,7 +340,7 @@ export const ReelViewerModal: React.FC<ReelViewerModalProps> = ({
         <VideoView
           player={player}
           style={styles.bgVideo}
-          contentFit="cover"
+          contentFit={videoFit}
           nativeControls={false}
           pointerEvents="none"
         />

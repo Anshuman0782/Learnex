@@ -7,6 +7,9 @@ import {
   TouchableOpacity,
   Text,
   PanResponder,
+  Animated,
+  Easing,
+  Dimensions,
   ScrollView,
   Image,
 } from 'react-native';
@@ -48,6 +51,8 @@ export const HomeScreen: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCritiquePost, setActiveCritiquePost] = useState<CommunityPost | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  // Selected category chip (null = "For you" = everything).
+  const [category, setCategory] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<'all' | 'photo' | 'video' | 'audio' | 'text' | 'people'>('all');
   const [sortBy, setSortBy] = useState<'recent' | 'popular'>('recent');
 
@@ -87,18 +92,37 @@ export const HomeScreen: React.FC = () => {
   const [videoStarted, setVideoStarted] = useState(false); // show thumbnail before autoplay kicks in
   const playDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // PanResponder for smooth screen swiping gesture (Slide Left -> Switch to Reels)
+  // One smooth swipe left → Reels. The screen follows the finger; past ~28% of
+  // the width (or a quick flick) it slides away into Reels, otherwise springs back.
+  const swipeX = useRef(new Animated.Value(0)).current;
+  const screenW = Dimensions.get('window').width;
+  const springBack = () =>
+    Animated.spring(swipeX, { toValue: 0, useNativeDriver: true, speed: 18, bounciness: 5 }).start();
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gestureState) => {
-        return Math.abs(gestureState.dx) > 35 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5;
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        if (gestureState.dx < -50) {
-          navigation.navigate('ReelsTab');
+      // Leftward + clearly horizontal. Horizontal carousels (chips, circles,
+      // photo posts) still scroll — they claim their own swipes first.
+      onMoveShouldSetPanResponder: (_, g) => g.dx < -12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.3,
+      // Once we own the swipe, the vertical feed can't steal it mid-gesture.
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, g) => swipeX.setValue(Math.min(0, g.dx)),
+      onPanResponderRelease: (_, g) => {
+        if (g.dx < -screenW * 0.28 || g.vx < -0.55) {
+          Animated.timing(swipeX, {
+            toValue: -screenW,
+            duration: 170,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }).start(() => {
+            navigation.navigate('ReelsTab');
+            setTimeout(() => swipeX.setValue(0), 300); // ready for when we come back
+          });
+        } else {
+          springBack();
         }
       },
+      onPanResponderTerminate: springBack,
     })
   ).current;
 
@@ -122,8 +146,26 @@ export const HomeScreen: React.FC = () => {
     return true;
   };
 
+  // Category chips = categories that actually have posts in the feed right now
+  // (from the circles each post was shared to), most active first.
+  const availableCategories = (() => {
+    const counts = new Map<string, { label: string; n: number }>();
+    publicPosts.forEach((p) =>
+      (p.communityCategories ?? []).forEach((c) => {
+        const k = c.trim().toLowerCase();
+        if (!k) return;
+        const cur = counts.get(k);
+        counts.set(k, { label: cur?.label ?? c.trim(), n: (cur?.n ?? 0) + 1 });
+      }),
+    );
+    return [...counts.values()].sort((a, b) => b.n - a.n).map((x) => x.label);
+  })();
+  const inCategory = (p: CommunityPost) =>
+    !category || (p.communityCategories ?? []).some((c) => c.toLowerCase() === category.toLowerCase());
+
   const filteredPosts = publicPosts
     .filter(matchesType)
+    .filter(inCategory)
     .filter((p) => {
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
@@ -138,7 +180,8 @@ export const HomeScreen: React.FC = () => {
     })
     .sort((a, b) => (sortBy === 'popular' ? (b.likesCount || 0) - (a.likesCount || 0) : 0));
 
-  const isSearchingOrFiltering = searchQuery.trim().length > 0 || filterType !== 'all' || sortBy !== 'recent';
+  const isSearchingOrFiltering =
+    searchQuery.trim().length > 0 || filterType !== 'all' || sortBy !== 'recent' || !!category;
   const feedPosts = isSearchingOrFiltering ? filteredPosts : publicPosts;
 
   const isAudioPost = (p?: CommunityPost) =>
@@ -234,7 +277,16 @@ export const HomeScreen: React.FC = () => {
   }).current;
 
   return (
-    <View style={styles.container} {...panResponder.panHandlers}>
+    <Animated.View
+      style={[
+        styles.container,
+        {
+          transform: [{ translateX: swipeX }],
+          opacity: swipeX.interpolate({ inputRange: [-screenW, 0], outputRange: [0.55, 1], extrapolate: 'clamp' }),
+        },
+      ]}
+      {...panResponder.panHandlers}
+    >
       {/* Fixed Top Header */}
       <View style={{ paddingTop: Math.max(insets.top, 12), backgroundColor: '#FFFFFF' }}>
         <HomeHeader
@@ -331,33 +383,30 @@ export const HomeScreen: React.FC = () => {
               </View>
             )}
 
-            {/* Feed type tabs */}
+            {/* Category chips: For you + categories that have posts right now */}
             {!peopleMode && (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.typeTabs}>
-                {([
-                  { key: 'all', label: 'For you', icon: 'sparkles' },
-                  { key: 'photo', label: 'Photos', icon: 'image' },
-                  { key: 'video', label: 'Videos', icon: 'play-circle' },
-                  { key: 'audio', label: 'Audio', icon: 'musical-notes' },
-                  { key: 'text', label: 'Discuss', icon: 'chatbubbles' },
-                ] as const).map((t) => {
-                  const on = filterType === t.key;
-                  return (
-                    <TouchableOpacity key={t.key} activeOpacity={0.85} onPress={() => setFilterType(t.key)}>
-                      {on ? (
-                        <LinearGradient colors={['#4F46E5', '#9333EA']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.typeTab}>
-                          <Ionicons name={t.icon} size={14} color="#FFFFFF" />
-                          <Text style={[styles.typeTabText, { color: '#FFFFFF' }]}>{t.label}</Text>
-                        </LinearGradient>
-                      ) : (
-                        <View style={[styles.typeTab, styles.typeTabOff]}>
-                          <Ionicons name={`${t.icon}-outline` as any} size={14} color="#475569" />
-                          <Text style={styles.typeTabText}>{t.label}</Text>
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
+                {[null, ...availableCategories.filter((c) => !category || c.toLowerCase() !== category.toLowerCase()), ...(category ? [category] : [])]
+                  .sort((a, b) => (a === null ? -1 : b === null ? 1 : a === category ? -1 : b === category ? 1 : 0))
+                  .map((c) => {
+                    const on = c === category;
+                    const label = c ?? 'For you';
+                    return (
+                      <TouchableOpacity key={label} activeOpacity={0.85} onPress={() => setCategory(c)}>
+                        {on ? (
+                          <LinearGradient colors={['#4F46E5', '#9333EA']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.typeTab}>
+                            <Ionicons name={c ? 'pricetag' : 'sparkles'} size={14} color="#FFFFFF" />
+                            <Text style={[styles.typeTabText, { color: '#FFFFFF' }]}>{label}</Text>
+                          </LinearGradient>
+                        ) : (
+                          <View style={[styles.typeTab, styles.typeTabOff]}>
+                            <Ionicons name={c ? 'pricetag-outline' : 'sparkles-outline'} size={14} color="#475569" />
+                            <Text style={styles.typeTabText}>{label}</Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
               </ScrollView>
             )}
 
@@ -550,7 +599,7 @@ export const HomeScreen: React.FC = () => {
         post={activeCritiquePost}
         onClose={() => setActiveCritiquePost(null)}
       />
-    </View>
+    </Animated.View>
   );
 };
 

@@ -8,11 +8,10 @@ import {
   Param,
   Post,
   Query,
-  UseGuards,
+
 } from '@nestjs/common';
 import { EventsService } from './events.service.js';
 import { CreateEventDto } from './dto/create-event.dto.js';
-import { AdminGuard } from '../admin/admin.guard.js';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type.js';
 
@@ -44,9 +43,8 @@ export class EventsController {
     return this.events.detail(user.userId, id);
   }
 
-  /** Create an event — Admin Panel access required. */
+  /** Create an event — app admins or that circle's admins (checked in the service). */
   @Post()
-  @UseGuards(AdminGuard)
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateEventDto) {
     return this.events.create(user.userId, dto);
   }
@@ -71,10 +69,9 @@ export class EventsController {
     return this.events.collect(user.userId, id);
   }
 
-  /** End an event early — Admin Panel access required. */
+  /** End an event early — app admins or that circle's admins. */
   @Delete(':id')
-  @UseGuards(AdminGuard)
-  remove(@Param('id') id: string) {
-    return this.events.remove(id);
+  remove(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.events.remove(user.userId, id);
   }
 }

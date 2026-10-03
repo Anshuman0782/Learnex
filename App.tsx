@@ -1,6 +1,7 @@
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { AppProvider } from './src/context/AppContext';
 import { CallProvider } from './src/realtime/CallContext';
 import { CallModal } from './src/components/common/CallModal';
@@ -14,6 +15,8 @@ void NativeSplash.preventAutoHideAsync().catch(() => undefined);
 export default function App() {
   return (
     <SafeAreaProvider>
+      {/* Edge-to-edge keyboard handling (inputs stay above the keyboard) */}
+      <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
       <AppProvider>
         <CallProvider>
           <StatusBar style="dark" />
@@ -24,6 +27,7 @@ export default function App() {
           <NotificationRouter />
         </CallProvider>
       </AppProvider>
+      </KeyboardProvider>
     </SafeAreaProvider>
   );
 }

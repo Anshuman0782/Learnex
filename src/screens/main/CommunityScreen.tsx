@@ -48,6 +48,7 @@ export const CommunityScreen: React.FC = () => {
     posts,
     reels,
     communityEvents,
+    feedVersion,
     playAudioPost,
     closeAudioPost,
     toggleCommunityJoin,
@@ -135,7 +136,7 @@ export const CommunityScreen: React.FC = () => {
     };
     // Re-sync when posts are created/deleted anywhere in the app.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCommunity?.id, posts.length, reels.length]);
+  }, [activeCommunity?.id, posts.length, reels.length, feedVersion]);
 
   // Prefer the live copy from the app feeds so likes/comments update instantly.
   const fresh = (p: CommunityPost) =>

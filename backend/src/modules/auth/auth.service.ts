@@ -9,7 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import { User, UserRole } from '@prisma/client';
 import * as argon2 from 'argon2';
-import { randomInt } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { MailService } from '../mail/mail.service.js';
 import { UsersService } from '../users/users.service.js';
@@ -23,7 +23,7 @@ export interface AuthTokens {
 }
 
 /** User shape returned to clients — never includes secrets. */
-export type SafeUser = Omit<User, 'passwordHash' | 'hashedRefreshToken'>;
+export type SafeUser = Omit<User, 'passwordHash' | 'hashedRefreshToken' | 'prevRefreshTokenHash' | 'refreshRotatedAt'>;
 
 export interface AuthResult {
   user: SafeUser;
@@ -34,6 +34,8 @@ export interface AuthResult {
 const CODE_TTL_MS = 15 * 60 * 1000;
 const RESEND_GAP_MS = 60 * 1000;
 const MAX_CODE_ATTEMPTS = 5;
+/** A lost refresh reply can be retried with the previous token for this long. */
+const REFRESH_GRACE_MS = 2 * 60 * 1000;
 
 @Injectable()
 export class AuthService {
@@ -111,9 +113,21 @@ export class AuthService {
 
     const matches = await argon2.verify(user.hashedRefreshToken, presentedRefreshToken);
     if (!matches) {
-      // Token doesn't match the current session — treat as compromised, revoke.
-      await this.users.setHashedRefreshToken(user.id, null);
-      throw new UnauthorizedException('Session is no longer valid');
+      // The phone may hold the PREVIOUS token if our last reply was lost on the
+      // network (flaky mobile data / server waking up). Accept it briefly.
+      const recent =
+        !!user.prevRefreshTokenHash &&
+        !!user.refreshRotatedAt &&
+        Date.now() - user.refreshRotatedAt.getTime() < REFRESH_GRACE_MS &&
+        (await argon2.verify(user.prevRefreshTokenHash, presentedRefreshToken));
+      if (!recent) {
+        // Genuinely unknown/old token — treat as compromised, revoke.
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: { hashedRefreshToken: null, prevRefreshTokenHash: null, refreshRotatedAt: null },
+        });
+        throw new UnauthorizedException('Session is no longer valid');
+      }
     }
 
     return this.issueSession(user);
@@ -121,7 +135,11 @@ export class AuthService {
 
   /** End the session by clearing the stored refresh token. */
   async logout(userId: string): Promise<void> {
-    await this.users.setHashedRefreshToken(userId, null);
+    // Kill the current AND the grace-window token.
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { hashedRefreshToken: null, prevRefreshTokenHash: null, refreshRotatedAt: null },
+    });
   }
 
   /** Current user's profile (for GET /auth/me). */
@@ -194,7 +212,13 @@ export class AuthService {
       where: { id: user.id },
       // Setting a new password also revokes any active session. Receiving the
       // code proves they own the email, so it counts as verified too.
-      data: { passwordHash, hashedRefreshToken: null, emailVerifiedAt: user.emailVerifiedAt ?? new Date() },
+      data: {
+        passwordHash,
+        hashedRefreshToken: null,
+        prevRefreshTokenHash: null,
+        refreshRotatedAt: null,
+        emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
+      },
     });
     await this.prisma.passwordReset.update({
       where: { id: reset.id },
@@ -346,7 +370,15 @@ export class AuthService {
   async issueSession(user: User): Promise<AuthResult> {
     const tokens = await this.generateTokens(user.id, user.role);
     const hashedRefreshToken = await argon2.hash(tokens.refreshToken);
-    await this.users.setHashedRefreshToken(user.id, hashedRefreshToken);
+    // Keep the previous token for a short grace window (see refresh()).
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        hashedRefreshToken,
+        prevRefreshTokenHash: user.hashedRefreshToken ?? null,
+        refreshRotatedAt: new Date(),
+      },
+    });
     return { user: this.toSafeUser(user), tokens };
   }
 
@@ -361,7 +393,9 @@ export class AuthService {
         secret: this.config.get<string>('JWT_ACCESS_SECRET'),
         expiresIn: this.expiresIn('JWT_ACCESS_EXPIRES_IN'),
       }),
-      this.jwt.signAsync(payload, {
+      // Unique id per refresh token, so every rotation yields a distinct token
+      // (two issued in the same second must never be identical).
+      this.jwt.signAsync({ ...payload, jti: randomUUID() }, {
         secret: this.config.get<string>('JWT_REFRESH_SECRET'),
         expiresIn: this.expiresIn('JWT_REFRESH_EXPIRES_IN'),
       }),
@@ -376,7 +410,7 @@ export class AuthService {
   }
 
   private toSafeUser(user: User): SafeUser {
-    const { passwordHash: _p, hashedRefreshToken: _r, ...safe } = user;
+    const { passwordHash: _p, hashedRefreshToken: _r, prevRefreshTokenHash: _pr, refreshRotatedAt: _ra, ...safe } = user;
     return safe;
   }
 }

@@ -8,9 +8,10 @@ import {
   TextInput,
   ScrollView,
   Image,
-  KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useComposerBottomPadding } from '../common/KeyboardSafe';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Avatar } from './Avatar';
@@ -35,6 +36,7 @@ interface RepostModalProps {
  * does not import AppContext — that would create a require cycle.
  */
 export const RepostModal: React.FC<RepostModalProps> = ({ visible, post, circles, onClose, onSubmit }) => {
+  const composerPad = useComposerBottomPadding(16);
   const [caption, setCaption] = useState('');
   const [circleId, setCircleId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -59,11 +61,11 @@ export const RepostModal: React.FC<RepostModalProps> = ({ visible, post, circles
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <View style={styles.overlay}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.sheet}
+          behavior="padding" automaticOffset
+          style={[styles.sheet, { paddingBottom: composerPad }]}
         >
           <View style={styles.dragHandle} />
           <View style={styles.header}>

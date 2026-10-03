@@ -50,6 +50,10 @@ model User {
   // Hashed refresh token for the current session. Enables rotation + revocation:
   // null = logged out. Never store the raw refresh token.
   hashedRefreshToken String? @map("hashed_refresh_token")
+  /// Previous refresh token (accepted briefly after rotation, so a lost
+  /// network reply can't log the user out).
+  prevRefreshTokenHash String?   @map("prev_refresh_token_hash")
+  refreshRotatedAt     DateTime? @map("refresh_rotated_at")
 
   memberships  CommunityMembership[]
   posts        Post[]

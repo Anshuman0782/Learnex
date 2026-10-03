@@ -607,8 +607,31 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     return { name: input.name?.trim() || `${track} challenge`, tasks };
   }
 
-  /** Admins only (guarded in the controller). */
+  /**
+   * Who may create / end events in a circle: app admins (Admin Panel) and that
+   * circle's own admins. Checked against the database on every call.
+   */
+  async canManage(userId: string, communityId: string): Promise<boolean> {
+    const [u, m] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id: userId }, select: { isAdmin: true, deletedAt: true } }),
+      this.prisma.communityMembership.findUnique({
+        where: { userId_communityId: { userId, communityId } },
+        select: { role: true },
+      }),
+    ]);
+    if (!u || u.deletedAt) return false;
+    return u.isAdmin || m?.role === 'ADMIN';
+  }
+
+  private async assertCanManage(userId: string, communityId: string) {
+    if (!(await this.canManage(userId, communityId))) {
+      throw new ForbiddenException('Only this circle’s admins can manage its events');
+    }
+  }
+
+  /** App admins or this circle's admins. */
   async create(adminId: string, dto: CreateEventDto) {
+    await this.assertCanManage(adminId, dto.communityId);
     if (!dto.learner && !dto.mentor) {
       throw new BadRequestException('Add a Learner track, a Mentor track, or both.');
     }
@@ -743,10 +766,11 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  /** Admins only: end early — everyone is paid for progress so far, then it's removed. */
-  async remove(eventId: string) {
+  /** App/circle admins: end early — everyone is paid for progress so far, then it's removed. */
+  async remove(userId: string, eventId: string) {
     const [e] = await this.load({ id: eventId });
     if (!e) throw new NotFoundException('Event not found');
+    await this.assertCanManage(userId, e.communityId);
     const phase = this.phaseOf(e, e.participations.filter((p) => p.userId !== e.createdById).length);
     if (phase === 'live') {
       for (const p of e.participations) {

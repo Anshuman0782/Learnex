@@ -81,7 +81,9 @@ export const PostCard: React.FC<PostCardProps> = ({
   const extraCircles = Math.max(0, circleNames.length - 1);
 
   const isRepostEntry = !!post.repostedByName;
-  const repostCircleJoined = !!post.repostedCircleId && joinedCommunities.includes(post.repostedCircleId);
+  // Server says whether *this viewer* is a member; the local list covers a Join tap just now.
+  const repostCircleJoined =
+    !!post.repostedCircleId && (!!post.repostCircleJoined || joinedCommunities.includes(post.repostedCircleId));
   const isMentor = post.authorRole === 'Mentor';
 
   const mentorCritiques = post.comments?.filter((c) => c.isMentorCritique || c.commentType === 'mentor') || [];

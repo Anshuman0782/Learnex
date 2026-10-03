@@ -4,12 +4,12 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
   Image,
   Modal,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -142,7 +142,7 @@ export const SignUpScreen: React.FC = () => {
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior="padding" automaticOffset
     >
       {/* Top Bar with Back Button */}
       <View style={[styles.topBar, { paddingTop: Math.max(insets.top + 6, 16) }]}>

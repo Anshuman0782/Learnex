@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '../../context/AppContext';
 import { getLeaderboardCategoriesRequest } from '../../api/competition.api';
 import { ContactChangeSheet } from './ContactChangeSheet';
@@ -33,6 +34,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   onClose,
 }) => {
   const { user, updateUser, updateAvatar } = useApp();
+  const insets = useSafeAreaInsets();
 
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
@@ -131,7 +133,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, (Platform.OS === 'ios' ? spacing.xl : spacing.lg) - 8) + 8 }]}>
           {/* Top Bar */}
           <View style={styles.topBar}>
             <TouchableOpacity activeOpacity={0.7} onPress={onClose} style={styles.closeBtn}>

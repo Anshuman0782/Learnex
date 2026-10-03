@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { View, StyleSheet, Modal, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface VideoPlayerModalProps {
   visible: boolean;
@@ -14,6 +15,7 @@ interface VideoPlayerModalProps {
  * feed doesn't spin up a video player per card. Plays real uploaded clips.
  */
 export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ visible, uri, onClose }) => {
+  const insets = useSafeAreaInsets();
   const player = useVideoPlayer(uri ?? null, (p) => {
     p.loop = false;
   });
@@ -28,7 +30,7 @@ export const VideoPlayerModal: React.FC<VideoPlayerModalProps> = ({ visible, uri
 
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      <View style={styles.backdrop}>
+      <View style={[styles.backdrop, { paddingBottom: insets.bottom }]}>
         <TouchableOpacity activeOpacity={0.8} onPress={onClose} style={styles.closeBtn}>
           <Ionicons name="close" size={22} color="#FFFFFF" />
         </TouchableOpacity>

@@ -12,6 +12,7 @@ import * as SecureStore from 'expo-secure-store';
  */
 const ACCESS_KEY = 'lernex.accessToken';
 const REFRESH_KEY = 'lernex.refreshToken';
+const USER_KEY = 'lernex.cachedUser';
 
 export interface AuthTokens {
   accessToken: string;
@@ -80,5 +81,23 @@ export async function getRefreshToken(): Promise<string | null> {
 }
 
 export async function clearTokens(): Promise<void> {
-  await Promise.all([deleteItem(ACCESS_KEY), deleteItem(REFRESH_KEY)]);
+  await Promise.all([deleteItem(ACCESS_KEY), deleteItem(REFRESH_KEY), deleteItem(USER_KEY)]);
+}
+
+/** Last known profile, so the app opens even while the server is waking up. */
+export async function saveCachedUser(user: unknown): Promise<void> {
+  try {
+    await setItem(USER_KEY, JSON.stringify(user));
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function getCachedUser<T>(): Promise<T | null> {
+  try {
+    const raw = await getItem(USER_KEY);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
 }

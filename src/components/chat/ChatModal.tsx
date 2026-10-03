@@ -8,10 +8,11 @@ import {
   TextInput,
   TouchableOpacity,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   Alert,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useComposerBottomPadding } from '../common/KeyboardSafe';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp, type ChatPeer } from '../../context/AppContext';
@@ -60,6 +61,7 @@ const sameDay = (a: string, b: string) => new Date(a).toDateString() === new Dat
  */
 export const ChatModal: React.FC = () => {
   const insets = useSafeAreaInsets();
+  const composerPad = useComposerBottomPadding(10);
   const { user, chatView, closeChat, openChatWith, openChatInbox, setActiveChatConversation, refreshChatUnread } =
     useApp();
   const myId = user?.id;
@@ -357,10 +359,10 @@ export const ChatModal: React.FC = () => {
   const isThread = chatView?.mode === 'thread';
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={goBack}>
+    <Modal visible={visible} animationType="slide" onRequestClose={goBack} statusBarTranslucent navigationBarTranslucent>
       <KeyboardAvoidingView
         style={[styles.container, { paddingTop: Math.max(insets.top, 10) }]}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding" automaticOffset
       >
         {/* Header */}
         <View style={styles.header}>
@@ -532,7 +534,7 @@ export const ChatModal: React.FC = () => {
               />
             )}
 
-            <View style={[styles.composer, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+            <View style={[styles.composer, { paddingBottom: composerPad }]}>
               <TextInput
                 value={text}
                 onChangeText={setText}

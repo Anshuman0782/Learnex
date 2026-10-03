@@ -8,12 +8,14 @@ import {
   ScrollView,
   TextInput,
   Image,
-  KeyboardAvoidingView,
   Platform,
   Alert,
   Share,
   ActivityIndicator,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useComposerBottomPadding } from '../common/KeyboardSafe';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -38,6 +40,8 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
   onClose,
   initialTab = 'mentor',
 }) => {
+  const composerPad = useComposerBottomPadding(10);
+  const topInset = useSafeAreaInsets().top;
   const {
     selectedRole,
     posts,
@@ -231,14 +235,14 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <View style={styles.modalOverlay}>
         <KeyboardAvoidingView
           style={styles.modalContainer}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding" automaticOffset
         >
           {/* Top Bar Drag Handle & Close */}
-          <View style={styles.topBar}>
+          <View style={[styles.topBar, { paddingTop: topInset + 4 }]}>
             <View style={styles.dragPill} />
             <View style={styles.headerRow}>
               <View style={styles.communityTag}>
@@ -668,7 +672,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
           </ScrollView>
 
           {/* Bottom Comment Composer Input Bar */}
-          <View style={styles.bottomInputBar}>
+          <View style={[styles.bottomInputBar, { paddingBottom: composerPad }]}>
             {isMentor && (
               <View style={styles.composeTypeRow}>
                 <Text style={styles.replyingAsLabel}>Posting as:</Text>

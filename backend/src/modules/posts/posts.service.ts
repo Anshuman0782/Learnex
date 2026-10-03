@@ -41,11 +41,49 @@ export class PostsService {
     private readonly notifications: NotificationsService,
   ) {}
 
+  // --- live updates -------------------------------------------------------
+
+  /**
+   * Tell every open app that feeds changed (new / edited / deleted post, repost).
+   * Carries no private data: clients re-fetch their own (permission-checked) feed.
+   */
+  private announce(reason: 'post' | 'update' | 'delete' | 'repost', postId: string, isShort = false) {
+    this.realtime.emitToAll('feed:changed', { reason, postId, isShort });
+  }
+
+  /** Live like / comment / repost counts for a post (numbers only). */
+  private async broadcastStats(postId: string) {
+    const p = await this.prisma.post.findUnique({
+      where: { id: postId },
+      select: {
+        isPrivate: true,
+        _count: { select: { likes: true, reposts: true, comments: { where: { deletedAt: null, isHidden: false } } } },
+      },
+    });
+    if (!p || p.isPrivate) return;
+    this.realtime.emitToAll('post:stats', {
+      postId,
+      likesCount: p._count.likes,
+      commentsCount: p._count.comments,
+      repostsCount: p._count.reposts,
+    });
+  }
+
   /** Everything needed to build the app-shaped post, scoped to the viewer. */
   private include(userId: string) {
     return {
-      author: { select: { id: true, name: true, role: true, hobby: true, avatarUrl: true } },
-      communities: { include: { community: { select: { id: true, name: true } } } },
+      author: {
+        select: {
+          id: true,
+          name: true,
+          role: true,
+          hobby: true,
+          avatarUrl: true,
+          // Does the viewer follow this author? (Reels hide "Follow" if so.)
+          followers: { where: { followerId: userId }, select: { followerId: true } },
+        },
+      },
+      communities: { include: { community: { select: { id: true, name: true, category: true } } } },
       comments: {
         where: { deletedAt: null, isHidden: false },
         orderBy: { createdAt: 'desc' as const },
@@ -126,6 +164,10 @@ export class PostsService {
       authorName: post.author.name,
       authorRole: roleLabel(post.author.role),
       authorSkill: post.author.hobby ?? 'Music',
+      authorFollowed: Array.isArray(post.author.followers) && post.author.followers.length > 0,
+      communityCategories: Array.from(
+        new Set(post.communities.map((pc: any) => pc.community.category).filter(Boolean)),
+      ) as string[],
       authorAvatar: post.author.avatarUrl ?? '',
       timeAgo: timeAgo(post.createdAt),
       content: post.content,
@@ -252,6 +294,16 @@ export class PostsService {
         })
       : [];
     const circleName = new Map(circles.map((c) => [c.id, c.name]));
+    const myCircles = circleIds.length
+      ? new Set(
+          (
+            await this.prisma.communityMembership.findMany({
+              where: { userId, communityId: { in: circleIds } },
+              select: { communityId: true },
+            })
+          ).map((m) => m.communityId),
+        )
+      : new Set<string>();
 
     return reposts.map((r) => ({
       sortAt: r.createdAt.getTime(),
@@ -265,6 +317,8 @@ export class PostsService {
         repostCaption: r.caption ?? undefined,
         repostedCircleId: r.communityId ?? undefined,
         repostedCircleName: r.communityId ? circleName.get(r.communityId) ?? undefined : undefined,
+        // "Join" is shown only to people who aren't members yet.
+        repostCircleJoined: r.communityId ? myCircles.has(r.communityId) : undefined,
       },
     }));
   }
@@ -378,6 +432,16 @@ export class PostsService {
         : 'discussion';
       await this.xp.onPostCreated(userId, post.id, kind);
     }
+    if (!post.isPrivate) {
+      if (!scheduledFuture) this.announce('post', post.id, post.isShort);
+      else {
+        const delay = post.scheduledAt!.getTime() - Date.now() + 1000;
+        // Within 24h: announce the moment it goes live (apps also refresh on open).
+        if (delay < 24 * 60 * 60_000) {
+          setTimeout(() => this.announce('post', post.id, post.isShort), delay).unref?.();
+        }
+      }
+    }
     return this.serialize(post);
   }
 
@@ -403,6 +467,7 @@ export class PostsService {
         content: dto.content ?? undefined,
       },
     });
+    this.announce('update', id);
     return this.findOne(userId, id);
   }
 
@@ -434,6 +499,7 @@ export class PostsService {
       throw new ForbiddenException('You can only delete your own posts');
     }
     await this.prisma.post.update({ where: { id }, data: { deletedAt: new Date() } });
+    this.announce('delete', id);
     return { success: true };
   }
 
@@ -479,6 +545,7 @@ export class PostsService {
     } else {
       await this.prisma.postLike.deleteMany({ where: { postId, userId } });
     }
+    void this.broadcastStats(postId);
     return this.findOne(userId, postId);
   }
 
@@ -531,6 +598,8 @@ export class PostsService {
     } else {
       await this.prisma.repost.deleteMany({ where: { postId, userId } });
     }
+    this.announce('repost', postId);
+    void this.broadcastStats(postId);
     return this.findOne(userId, postId);
   }
 
@@ -606,6 +675,7 @@ export class PostsService {
         isLiked: false,
       },
     });
+    void this.broadcastStats(postId);
 
     if (post.authorId !== userId) {
       await this.notifications.create({
@@ -667,6 +737,7 @@ export class PostsService {
       throw new ForbiddenException('You can only delete your own comments');
     }
     await this.prisma.comment.update({ where: { id: commentId }, data: { deletedAt: new Date() } });
+    void this.broadcastStats(comment.postId);
     return this.findOne(userId, comment.postId);
   }
 

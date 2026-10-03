@@ -8,10 +8,11 @@ import {
   TouchableOpacity,
   TextInput,
   Alert,
-  KeyboardAvoidingView,
   Platform,
   Switch,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../../context/AppContext';
 import { getEventCatalogRequest, type EventCatalog, type EventTaskInput } from '../../api/competition.api';
@@ -53,6 +54,7 @@ export const EventCreateModal: React.FC<{
   onClose: () => void;
 }> = ({ visible, communityId, communityName, onClose }) => {
   const { createCommunityEvent } = useApp();
+  const insets = useSafeAreaInsets();
   const [catalog, setCatalog] = useState<EventCatalog | null>(null);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -235,7 +237,7 @@ export const EventCreateModal: React.FC<{
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.sheet}>
+        <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.sheet}>
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
               <Text style={styles.headerTitle}>Post a challenge</Text>
@@ -246,7 +248,7 @@ export const EventCreateModal: React.FC<{
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+          <ScrollView contentContainerStyle={[styles.body, { paddingBottom: 40 + insets.bottom }]} keyboardShouldPersistTaps="handled">
             <Text style={styles.label}>Title</Text>
             <TextInput value={title} onChangeText={setTitle} maxLength={60} placeholder="e.g. October Sprint" placeholderTextColor="#94A3B8" style={styles.input} />
             <Text style={styles.label}>Message to the circle</Text>

@@ -44,7 +44,10 @@ export const CommunityEventsSection: React.FC<CommunityEventsSectionProps> = ({
   communityName,
   onSelectEvent,
 }) => {
-  const { user } = useApp();
+  const { user, getJoinedCommunityObjects } = useApp();
+  // App admins and this circle's own admins can create / end events.
+  const canManage =
+    !!user?.isAdmin || (!!communityId && getJoinedCommunityObjects().some((c) => c.id === communityId && c.isAdmin));
   const [rules, setRules] = useState<string[]>([]);
   const [showRules, setShowRules] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -70,7 +73,7 @@ export const CommunityEventsSection: React.FC<CommunityEventsSectionProps> = ({
           <Text style={styles.title}>Events & Challenges</Text>
           <Text style={styles.subtitle}>Vote to join · separate Learner & Mentor tracks</Text>
         </View>
-        {user?.isAdmin && communityId && (
+        {canManage && communityId && (
           <TouchableOpacity activeOpacity={0.85} onPress={() => setCreating(true)} style={styles.createBtn}>
             <Ionicons name="add" size={16} color="#FFFFFF" />
             <Text style={styles.createText}>Create</Text>
@@ -128,9 +131,9 @@ export const CommunityEventsSection: React.FC<CommunityEventsSectionProps> = ({
           </View>
           <Text style={styles.emptyTitle}>No active events right now</Text>
           <Text style={styles.emptyBody}>
-            {user?.isAdmin
+            {canManage
               ? 'Tap Create to launch a challenge. Members vote to join, then it goes live.'
-              : 'When the LERNEX team posts a challenge here, vote to join it.'}
+              : 'When this circle’s admins post a challenge here, vote to join it.'}
           </Text>
         </View>
       ) : (

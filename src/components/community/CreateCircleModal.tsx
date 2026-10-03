@@ -7,12 +7,12 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Image,
   Alert,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -168,7 +168,7 @@ export const CreateCircleModal: React.FC<CreateCircleModalProps> = ({ visible, o
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={styles.container} behavior="padding" automaticOffset>
         {/* Header */}
         <View style={[styles.header, { paddingTop: Math.max(insets.top + 6, 16) }]}>
           <TouchableOpacity onPress={onClose} style={styles.headerBtn}>
@@ -182,7 +182,7 @@ export const CreateCircleModal: React.FC<CreateCircleModalProps> = ({ visible, o
           </TouchableOpacity>
         </View>
 
-        <ScrollView contentContainerStyle={{ padding: spacing.base, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={{ padding: spacing.base, paddingBottom: 40 + insets.bottom }} showsVerticalScrollIndicator={false}>
           {/* Logo picker */}
           <View style={styles.iconPreviewRow}>
             <TouchableOpacity activeOpacity={0.85} onPress={handlePickLogo} style={styles.iconPreviewTouch}>

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Modal, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCall } from '../../realtime/CallContext';
 import { Avatar } from './Avatar';
 import { typography } from '../../theme';
@@ -26,6 +27,7 @@ function getRTCView(): React.ComponentType<any> {
  */
 export const CallModal: React.FC = () => {
   const { call, acceptCall, rejectCall, endCall, toggleMute, toggleVideo, toggleSpeaker, switchCamera } = useCall();
+  const insets = useSafeAreaInsets();
   const [seconds, setSeconds] = useState(0);
 
   useEffect(() => {
@@ -110,7 +112,7 @@ export const CallModal: React.FC = () => {
         )}
 
         {/* Controls */}
-        <View style={styles.controls}>
+        <View style={[styles.controls, { bottom: 48 + insets.bottom }]}>
           {call.status === 'incoming' ? (
             <View style={styles.incomingRow}>
               <TouchableOpacity onPress={rejectCall} style={[styles.roundBtn, styles.declineBtn]}>

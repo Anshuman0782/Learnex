@@ -112,7 +112,7 @@ export interface ChatPeer {
 export type ChatView = { mode: 'inbox' } | { mode: 'thread'; peer: ChatPeer };
 import { deleteCommentRequest, editCommentRequest } from '../api/social.api';
 import { NotificationsModal } from '../components/common/NotificationsModal';
-import { saveTokens, clearTokens, getAccessToken } from '../services/tokenStorage';
+import { saveTokens, clearTokens, getAccessToken, saveCachedUser, getCachedUser } from '../services/tokenStorage';
 import { setOnAuthFailure } from '../api/client';
 /** Placeholder until the server's season loads: the real current month (UTC). */
 function currentMonthSeason(): SeasonCycleInfo {
@@ -300,6 +300,8 @@ interface AppContextType {
   closeAudioPost: () => void;
   // Realtime notifications
   notifications: AppNotification[];
+  /** Increments when server feeds change (live updates). */
+  feedVersion: number;
   unreadCount: number;
   openNotifications: () => void;
   closeNotifications: () => void;
@@ -462,6 +464,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
   const [reels, setReels] = useState<CommunityPost[]>([]);
   const [audioPost, setAudioPost] = useState<CommunityPost | null>(null);
+  // Live updates: bumped whenever feeds change on the server (new / edited /
+  // deleted posts, reposts) so open screens (e.g. a circle feed) can refresh.
+  const [feedVersion, setFeedVersion] = useState(0);
+  const feedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const circlesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -853,6 +860,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const applySession = (api: ApiUser, avatarOverride?: string) => {
+    void saveCachedUser(api); // lets the app open even if the server is slow later
     const localUser = toLocalUser(api, avatarOverride);
     setUser(localUser);
     setSelectedHobby(localUser.hobby || 'Music');
@@ -875,11 +883,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const token = await getAccessToken();
         if (token) {
-          const me = await meRequest();
-          if (active) applySession(me);
+          // The free server may be waking up (~30-60s) or the phone offline:
+          // retry a few times, and never treat that as "logged out".
+          let me: ApiUser | null = null;
+          for (let attempt = 0; attempt < 4 && !me; attempt++) {
+            try {
+              me = await meRequest();
+            } catch (err: any) {
+              if (err?.status === 401 || err?.status === 403) throw err; // truly invalid
+              if (attempt < 3) await new Promise((r) => setTimeout(r, [2000, 5000, 10000][attempt]));
+            }
+          }
+          if (me) {
+            if (active) applySession(me);
+          } else {
+            // Still unreachable: open with the cached profile; it refreshes later.
+            const cached = await getCachedUser<ApiUser>();
+            if (cached && active) applySession(cached);
+          }
         }
       } catch {
-        // No valid session — stay logged out.
+        // The server rejected the session (refresh failed) → logged out.
         await clearTokens();
       } finally {
         if (active) setBootstrapping(false);
@@ -1168,6 +1192,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // An admin created or ended a circle event → refresh events now.
       sock.on('events:updated', () => {
         void refreshEvents();
+      });
+
+      // Someone posted / edited / deleted / reposted → refresh the feeds
+      // (batched so a burst of activity causes one refresh, not many).
+      sock.on('feed:changed', () => {
+        if (feedTimerRef.current) clearTimeout(feedTimerRef.current);
+        feedTimerRef.current = setTimeout(() => {
+          void loadPosts();
+          void loadReels();
+          setFeedVersion((v) => v + 1);
+        }, 1500);
+      });
+
+      // Live like / comment / repost counts — patched in place, no reload.
+      sock.on(
+        'post:stats',
+        (d: { postId: string; likesCount: number; commentsCount: number; repostsCount: number }) => {
+          const upd = (p: CommunityPost) =>
+            p.id === d.postId
+              ? { ...p, likesCount: d.likesCount, commentsCount: d.commentsCount, repostsCount: d.repostsCount }
+              : p;
+          setPosts((prev) => prev.map(upd));
+          setReels((prev) => prev.map(upd));
+        },
+      );
+
+      // A circle was created / edited / deleted, or its members changed.
+      sock.on('communities:changed', () => {
+        if (circlesTimerRef.current) clearTimeout(circlesTimerRef.current);
+        circlesTimerRef.current = setTimeout(() => void loadCommunityData(), 1500);
       });
 
       // An admin changed the rewards catalog → refresh it now.
@@ -1668,6 +1722,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleAudioPlayback,
         closeAudioPost,
         notifications,
+        feedVersion,
         unreadCount,
         openNotifications,
         closeNotifications,

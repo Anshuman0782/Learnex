@@ -33,7 +33,7 @@ const TRACK_COLOR = { Learner: '#7C3AED', Mentor: '#0F766E' } as const;
  */
 export const CommunityEventModal: React.FC<CommunityEventModalProps> = ({ visible, event: eventProp, onClose }) => {
   const insets = useSafeAreaInsets();
-  const { user, communityEvents, voteCommunityEvent, collectEventXp, endCommunityEvent, showDialog } = useApp();
+  const { user, communityEvents, voteCommunityEvent, collectEventXp, endCommunityEvent, showDialog, getJoinedCommunityObjects } = useApp();
   const [detail, setDetail] = useState<CommunityEventDetail | null>(null);
   const [tab, setTab] = useState<'challenge' | 'board'>('challenge');
   const [busy, setBusy] = useState<'vote' | 'collect' | 'end' | null>(null);
@@ -161,7 +161,7 @@ export const CommunityEventModal: React.FC<CommunityEventModalProps> = ({ visibl
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 4) + 8 }]}>
           <LinearGradient colors={e.bannerGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
             <View style={styles.heroTop}>
               <View style={styles.pill}>
@@ -326,7 +326,7 @@ export const CommunityEventModal: React.FC<CommunityEventModalProps> = ({ visibl
                 </Text>
               </TouchableOpacity>
             ) : null}
-            {user?.isAdmin && (
+            {(user?.isAdmin || getJoinedCommunityObjects().some((c) => c.id === e.communityId && c.isAdmin)) && (
               <TouchableOpacity disabled={!!busy} onPress={end} style={styles.endBtn}>
                 <Ionicons name="stop-circle-outline" size={16} color="#DC2626" />
                 <Text style={styles.endText}>End event (admin)</Text>

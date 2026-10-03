@@ -6,6 +6,7 @@ import {
 import { Community, CommunityRole, Prisma, UserRole } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { RealtimeGateway } from '../realtime/realtime.gateway.js';
 
 /** A real community member — an actual user who joined. No fabricated fields. */
 export interface CommunityMemberView {
@@ -49,7 +50,15 @@ export interface CreateCommunityInput {
 
 @Injectable()
 export class CommunitiesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly realtime: RealtimeGateway,
+  ) {}
+
+  /** Tell open apps a circle changed (new / edited / deleted / members) → they refresh. */
+  private changed(communityId: string) {
+    this.realtime.emitToAll('communities:changed', { communityId });
+  }
 
   private async joinedIds(userId: string): Promise<Set<string>> {
     const rows = await this.prisma.communityMembership.findMany({
@@ -167,6 +176,7 @@ export class CommunitiesService {
       },
     });
     const [view] = await this.enrich([created], userId);
+    this.changed(view.id);
     return view;
   }
 
@@ -192,6 +202,7 @@ export class CommunitiesService {
       });
     }
     const [view] = await this.enrich([community], userId);
+    this.changed(communityId);
     return view;
   }
 
@@ -211,6 +222,7 @@ export class CommunitiesService {
       data: { role: isAdmin ? CommunityRole.ADMIN : CommunityRole.MEMBER },
     });
     const [view] = await this.enrich([community], userId);
+    this.changed(communityId);
     return view;
   }
 
@@ -277,6 +289,7 @@ export class CommunitiesService {
       },
     });
     const [view] = await this.enrich([updated], userId);
+    this.changed(communityId);
     return view;
   }
 
@@ -291,6 +304,7 @@ export class CommunitiesService {
       throw new ForbiddenException('Only the circle creator can delete it');
     }
     await this.prisma.community.delete({ where: { id: communityId } });
+    this.changed(communityId);
     return { success: true };
   }
 
@@ -310,6 +324,7 @@ export class CommunitiesService {
       where: { userId: targetId, communityId },
     });
     const [view] = await this.enrich([community], userId);
+    this.changed(communityId);
     return view;
   }
 
@@ -323,11 +338,13 @@ export class CommunitiesService {
       create: { userId, communityId },
       update: {},
     });
+    this.changed(communityId);
     return { isJoined: true };
   }
 
   async leave(userId: string, communityId: string): Promise<{ isJoined: false }> {
     await this.prisma.communityMembership.deleteMany({ where: { userId, communityId } });
+    this.changed(communityId);
     return { isJoined: false };
   }
 }

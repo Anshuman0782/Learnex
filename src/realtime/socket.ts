@@ -1,6 +1,8 @@
 import { AppState, type AppStateStatus } from 'react-native';
 import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '../config/env';
+import { getAccessToken } from '../services/tokenStorage';
+import { refreshSession } from '../api/client';
 
 // The WebSocket server is the API origin without the /api/v1 prefix.
 const WS_ORIGIN = API_BASE_URL.replace(/\/api\/v1\/?$/, '');
@@ -36,13 +38,27 @@ export function connectSocket(token: string): Socket {
     socket = null;
   }
   socket = io(WS_ORIGIN, {
-    auth: { token },
+    // Read the LATEST access token on every (re)connect — it rotates every 15 min.
+    auth: (cb) => {
+      void getAccessToken().then((t) => cb({ token: t ?? token }));
+    },
     transports: ['websocket'],
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1500,
   });
   socket.on('connect', () => reportAppState());
+  // The server drops sockets with an expired token ("io server disconnect"),
+  // which socket.io never retries on its own → renew the token, reconnect.
+  const s = socket;
+  s.on('disconnect', (reason) => {
+    if (reason !== 'io server disconnect') return;
+    setTimeout(() => {
+      void refreshSession().then((ok) => {
+        if (ok && socket === s && !s.connected) s.connect();
+      });
+    }, 1000);
+  });
   watchAppState();
   notify();
   return socket;

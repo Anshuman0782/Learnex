@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '../../context/AppContext';
 import { Community, CommunityMember, CommunityEvent } from '../../types';
 import { Avatar } from '../common/Avatar';
@@ -32,6 +33,7 @@ export const CommunityDetailsModal: React.FC<CommunityDetailsModalProps> = ({
   onRequestCritiqueFromMentor,
 }) => {
   const { openUserProfile, communityEvents, selectedRole } = useApp();
+  const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<'mentors' | 'members' | 'events' | 'about'>('mentors');
   const [selectedEvent, setSelectedEvent] = useState<CommunityEvent | null>(null);
 
@@ -57,7 +59,7 @@ export const CommunityDetailsModal: React.FC<CommunityDetailsModalProps> = ({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.modalSheet}>
+        <View style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, spacing.xl - 8) + 8 }]}>
           {/* Drag Handle */}
           <View style={styles.dragHandle} />
 

@@ -7,9 +7,10 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useComposerBottomPadding } from '../common/KeyboardSafe';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../../context/AppContext';
@@ -31,6 +32,7 @@ type Step = 'enter' | 'confirm' | 'verifyNew' | 'done';
  */
 export const ContactChangeSheet: React.FC<Props> = ({ visible, field, onClose }) => {
   const { user, requestContactChange, confirmContactChange, confirmEmailVerification, sendEmailVerification } = useApp();
+  const composerPad = useComposerBottomPadding(22);
   const [step, setStep] = useState<Step>('enter');
   const [value, setValue] = useState('');
   const [sentTo, setSentTo] = useState('');
@@ -102,9 +104,9 @@ export const ContactChangeSheet: React.FC<Props> = ({ visible, field, onClose })
       : 'All set';
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.sheet}>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
+      <KeyboardAvoidingView style={styles.backdrop} behavior="padding" automaticOffset>
+        <View style={[styles.sheet, { paddingBottom: composerPad }]}>
           <View style={styles.head}>
             <Text style={styles.title}>{title}</Text>
             <TouchableOpacity onPress={onClose} style={styles.close}>

@@ -9,9 +9,10 @@ import {
   Modal,
   ScrollView,
   Switch,
-  KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useApp } from '../../context/AppContext';
@@ -73,6 +74,7 @@ const ROLE_OPTIONS = [
 const iconFor = (type: string) => REWARD_TYPES.find((t) => t.id === type)?.icon ?? 'gift';
 
 export const AdminRewardsTab: React.FC<{ onForbidden: () => void }> = ({ onForbidden }) => {
+  const insets = useSafeAreaInsets();
   const { showDialog } = useApp();
   const [rewards, setRewards] = useState<AdminReward[]>([]);
   const [loading, setLoading] = useState(true);
@@ -230,7 +232,7 @@ export const AdminRewardsTab: React.FC<{ onForbidden: () => void }> = ({ onForbi
 
       <Modal visible={!!draft} animationType="slide" transparent onRequestClose={() => setDraft(null)}>
         <View style={styles.overlay}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.sheet}>
+          <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.sheet}>
             <View style={styles.sheetHeader}>
               <Text style={styles.sheetTitle}>{draft?.id ? 'Edit reward' : 'New reward'}</Text>
               <TouchableOpacity onPress={() => setDraft(null)} style={styles.closeBtn}>
@@ -238,7 +240,7 @@ export const AdminRewardsTab: React.FC<{ onForbidden: () => void }> = ({ onForbi
               </TouchableOpacity>
             </View>
             {draft && (
-              <ScrollView contentContainerStyle={styles.sheetBody} keyboardShouldPersistTaps="handled">
+              <ScrollView contentContainerStyle={[styles.sheetBody, { paddingBottom: 40 + insets.bottom }]} keyboardShouldPersistTaps="handled">
                 <ChipPicker
                   label="Reward type"
                   options={REWARD_TYPES.map((t) => ({ id: t.id, label: t.label }))}

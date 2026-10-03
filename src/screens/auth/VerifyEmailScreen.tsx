@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ActivityIndicator,
+  Platform,
+} from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -69,7 +77,7 @@ export const VerifyEmailScreen: React.FC = () => {
   };
 
   return (
-    <KeyboardAvoidingView style={[styles.container, { paddingTop: insets.top + 24 }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={[styles.container, { paddingTop: insets.top + 24 }]} behavior="padding" automaticOffset>
       <View style={styles.iconWrap}>
         <LinearGradient colors={['#F59E0B', '#EC4899']} style={styles.icon}>
           <Ionicons name="mail-open" size={34} color="#FFFFFF" />

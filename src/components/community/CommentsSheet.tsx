@@ -7,10 +7,11 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
-  KeyboardAvoidingView,
   Platform,
   Alert,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useComposerBottomPadding } from '../common/KeyboardSafe';
 import { Ionicons } from '@expo/vector-icons';
 import { CommunityPost } from '../../types';
 import { useApp } from '../../context/AppContext';
@@ -30,6 +31,7 @@ interface CommentsSheetProps {
  * instant.
  */
 export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: postProp, onClose }) => {
+  const composerPad = useComposerBottomPadding(10);
   const {
     posts,
     reels,
@@ -74,12 +76,12 @@ export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: pos
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <View style={styles.overlay}>
         <TouchableOpacity style={styles.backdropTouch} activeOpacity={1} onPress={onClose} />
         <KeyboardAvoidingView
-          style={styles.sheet}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={[styles.sheet, { paddingBottom: composerPad }]}
+          behavior="padding" automaticOffset
         >
           <View style={styles.dragPill} />
           <View style={styles.headerRow}>

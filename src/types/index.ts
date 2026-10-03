@@ -121,6 +121,12 @@ export interface CommunityPost {
   repostCaption?: string;
   repostedCircleId?: string;
   repostedCircleName?: string;
+  /** Viewer is already a member of the repost's tagged circle (hide "Join"). */
+  repostCircleJoined?: boolean;
+  /** Viewer already follows this post's author. */
+  authorFollowed?: boolean;
+  /** Categories of the circles this post was shared to. */
+  communityCategories?: string[];
   communityName: string;
   communityIds?: string[];
   communityNames?: string[];
