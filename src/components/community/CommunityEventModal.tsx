@@ -311,7 +311,11 @@ export const CommunityEventModal: React.FC<CommunityEventModalProps> = ({ visibl
                 </TouchableOpacity>
               ) : (
                 <View style={[styles.primary, styles.disabled]}>
-                  <Text style={[styles.primaryText, { color: '#64748B' }]}>No challenge for {e.myRole ?? 'your role'}s</Text>
+                  <Text style={[styles.primaryText, { color: '#64748B', textAlign: 'center', paddingHorizontal: 12 }]}>
+                    {user?.role === 'Guest'
+                      ? 'Challenges award XP — switch from Guest to join'
+                      : `No challenge for ${e.myRole ?? 'your role'}s`}
+                  </Text>
                 </View>
               )
             ) : my && e.phase === 'live' ? (

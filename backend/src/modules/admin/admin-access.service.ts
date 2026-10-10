@@ -12,7 +12,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { RealtimeGateway } from '../realtime/realtime.gateway.js';
 
 const roleLabel = (r: UserRole | null) =>
-  r === UserRole.MENTOR ? 'Mentor' : r === UserRole.LEARNER ? 'Learner' : null;
+  r === UserRole.MENTOR ? 'Mentor' : r === UserRole.LEARNER ? 'Learner' : r === UserRole.GUEST ? 'Guest' : null;
 
 /**
  * Who can use the Admin Panel. Owners come from ADMIN_EMAILS: they're always

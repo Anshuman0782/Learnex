@@ -12,13 +12,13 @@ import { PushService } from '../push/push.service.js';
 const PAGE_SIZE = 30;
 
 const roleLabel = (r: UserRole | null) =>
-  r === UserRole.MENTOR ? 'Mentor' : r === UserRole.LEARNER ? 'Learner' : null;
+  r === UserRole.MENTOR ? 'Mentor' : r === UserRole.LEARNER ? 'Learner' : r === UserRole.GUEST ? 'Guest' : null;
 
 export interface ChatUser {
   id: string;
   name: string;
   avatarUrl: string;
-  role: 'Learner' | 'Mentor' | null;
+  role: 'Learner' | 'Mentor' | 'Guest' | null;
   isOnline: boolean;
   /** Voice/video calls are allowed only between mutual followers. */
   canCall: boolean;

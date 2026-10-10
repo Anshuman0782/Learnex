@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -16,12 +17,32 @@ type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'RoleSelecti
 export const RoleSelectionScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NavigationProp>();
-  const { enrollAsLearner, selectedRole, showDialog } = useApp();
+  const { enrollAsLearner, continueAsGuest, selectedRole, showDialog } = useApp();
+  // A Guest opening this page again is upgrading to Learner / Mentor.
+  const isUpgrading = selectedRole === 'Guest';
 
   const [currentSelected, setCurrentSelected] = useState<UserRole | null>(
-    selectedRole || 'Learner'
+    selectedRole && selectedRole !== 'Guest' ? selectedRole : 'Learner'
   );
   const [loading, setLoading] = useState(false);
+  const [guestLoading, setGuestLoading] = useState(false);
+
+  const handleGuest = async () => {
+    setGuestLoading(true);
+    try {
+      await continueAsGuest();
+      navigation.reset({ index: 0, routes: [{ name: 'Main', params: { screen: 'HomeTab' } }] });
+    } catch (err: any) {
+      showDialog({
+        title: 'Something went wrong',
+        message: err?.message || 'We couldn’t continue as guest right now. Please try again.',
+        icon: 'alert-circle-outline',
+        confirmText: 'OK',
+      });
+    } finally {
+      setGuestLoading(false);
+    }
+  };
 
   const handleRoleSelect = (roleId: UserRole) => {
     setCurrentSelected(roleId);
@@ -72,9 +93,11 @@ export const RoleSelectionScreen: React.FC = () => {
         </View>
 
         <View style={styles.headerSection}>
-          <Text style={styles.title}>Choose your role</Text>
+          <Text style={styles.title}>{isUpgrading ? 'Upgrade your account' : 'Choose your role'}</Text>
           <Text style={styles.subtitle}>
-            This personalizes your feed, recommendations, and mentor tools.
+            {isUpgrading
+              ? 'Become a Learner or Mentor to earn XP, join challenges and appear on the leaderboards.'
+              : 'This personalizes your feed, recommendations, and mentor tools.'}
           </Text>
         </View>
 
@@ -112,12 +135,62 @@ export const RoleSelectionScreen: React.FC = () => {
             />
           </View>
         )}
+
+        {/* Guest: explore without the XP / ranking game */}
+        {!isUpgrading && (
+          <>
+            <View style={styles.orRow}>
+              <View style={styles.orLine} />
+              <Text style={styles.orText}>or</Text>
+              <View style={styles.orLine} />
+            </View>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              disabled={guestLoading || loading}
+              onPress={handleGuest}
+              style={styles.guestCard}
+            >
+              <View style={styles.guestIcon}>
+                {guestLoading ? (
+                  <ActivityIndicator color="#475569" />
+                ) : (
+                  <Ionicons name="person-outline" size={22} color="#475569" />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.guestTitle}>Continue as Guest</Text>
+                <Text style={styles.guestText}>
+                  Post, comment, chat and join circles like everyone else. Guests don’t earn XP and aren’t on
+                  the leaderboards. You can become a Learner or Mentor any time from your profile.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
+            </TouchableOpacity>
+          </>
+        )}
       </ScrollView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
+  orRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 12 },
+  orLine: { flex: 1, height: 1, backgroundColor: '#E2E8F0' },
+  orText: { fontSize: 12, fontWeight: '700', color: '#94A3B8' },
+  guestCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: '#CBD5E1',
+    padding: 14,
+  },
+  guestIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  guestTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A' },
+  guestText: { fontSize: 12, color: '#64748B', lineHeight: 17, marginTop: 2 },
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',

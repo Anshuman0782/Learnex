@@ -9,6 +9,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { GuestUpgradeBanner } from '../../components/common/GuestUpgradeBanner';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../../components/common/Avatar';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
@@ -172,6 +173,11 @@ export const RankScreen: React.FC = () => {
         ]}
         showsVerticalScrollIndicator={false}
       >
+        {/* Guests can watch the boards, but aren't ranked */}
+        <View style={{ paddingHorizontal: 16, marginBottom: 12 }}>
+          <GuestUpgradeBanner message="You can watch the leaderboards, but Guests aren’t ranked and don’t earn XP. Become a Learner or Mentor to compete." />
+        </View>
+
         {/* TOP 3 PODIUM SECTION */}
         {top3.length >= 3 && (
           <View style={styles.podiumWrapper}>

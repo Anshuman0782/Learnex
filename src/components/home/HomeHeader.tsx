@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useNavigation } from '@react-navigation/native';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
@@ -26,6 +27,10 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
     chatUnread,
     openChatInbox,
   } = useApp();
+
+  const navigation = useNavigation<any>();
+  // Guests take part in everything except XP / streaks / ranking.
+  const isGuest = selectedRole === 'Guest';
 
   return (
     <View style={styles.container}>
@@ -83,21 +88,23 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
           >
             <Avatar
               uri={user?.avatarUrl}
-              name={user?.name || 'Anshuman Sarkar'}
+              name={user?.name || 'LERNEX'}
               size={44}
               showRing={false}
               showOnlineDot={false}
             />
           </LinearGradient>
-          <View style={styles.levelBadge}>
-            <Text style={styles.levelBadgeText}>L{user?.level ?? 1}</Text>
-          </View>
+          {!isGuest && (
+            <View style={styles.levelBadge}>
+              <Text style={styles.levelBadgeText}>L{user?.level ?? 1}</Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.nameBlock}>
           <View style={styles.greetingRow}>
             <Text style={styles.greetingName} numberOfLines={1}>
-              {user?.name?.split(' ')[0] || 'Anshuman'}
+              {user?.name?.split(' ')[0] || 'Hi'}
             </Text>
             <Text style={styles.waveEmoji}>👋</Text>
           </View>
@@ -113,6 +120,30 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
 
       {/* Right: Trophy/Rank Pill + Streak Pill + Notification Bell */}
       <View style={styles.actionsRow}>
+        {isGuest ? (
+          /* Guests: one clear way to join the XP game */
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() =>
+              showDialog({
+                title: 'You’re browsing as a Guest',
+                message:
+                  'You can post, comment and chat like everyone else. Become a Learner or Mentor to earn XP, keep streaks, join challenges and appear on the leaderboards.',
+                icon: 'rocket-outline',
+                confirmText: 'Upgrade',
+                cancelText: 'Not now',
+                onConfirm: () => navigation.navigate('RoleSelection'),
+              })
+            }
+            style={styles.rewardsPillWrapper}
+          >
+            <LinearGradient colors={['#F59E0B', '#EC4899']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.rewardsPillGradient}>
+              <Ionicons name="rocket" size={13} color="#FFFFFF" />
+              <Text style={styles.rewardsPillXp}>Upgrade</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        ) : (
+        <>
         {/* Trophy & XP Rank Pill */}
         <TouchableOpacity
           activeOpacity={0.8}
@@ -162,6 +193,8 @@ export const HomeHeader: React.FC<HomeHeaderProps> = ({
             <Text style={styles.streakCount}>{user?.streakDays ?? 0}d</Text>
           </LinearGradient>
         </TouchableOpacity>
+        </>
+        )}
       </View>
       </View>
     </View>

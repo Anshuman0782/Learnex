@@ -8,7 +8,7 @@ export interface PublicProfile {
   id: string;
   name: string;
   avatarUrl: string;
-  role: 'Learner' | 'Mentor' | null;
+  role: 'Learner' | 'Mentor' | 'Guest' | null;
   hobby: string | null;
   bio: string | null;
   handle: string | null;
@@ -24,7 +24,7 @@ export interface UserRow {
   id: string;
   name: string;
   avatarUrl: string;
-  role: 'Learner' | 'Mentor' | null;
+  role: 'Learner' | 'Mentor' | 'Guest' | null;
   isFollowing?: boolean; // does the viewer follow this person
   isSelf?: boolean;
 }
@@ -33,7 +33,7 @@ const toRow = (u: { id: string; name: string; avatarUrl: string | null; role: Us
   id: u.id,
   name: u.name,
   avatarUrl: u.avatarUrl ?? '',
-  role: u.role === UserRole.MENTOR ? 'Mentor' : u.role === UserRole.LEARNER ? 'Learner' : null,
+  role: u.role === UserRole.MENTOR ? 'Mentor' : u.role === UserRole.LEARNER ? 'Learner' : u.role === UserRole.GUEST ? 'Guest' : null,
 });
 
 @Injectable()
@@ -182,7 +182,7 @@ export class FollowService {
       id: user.id,
       name: user.name,
       avatarUrl: user.avatarUrl ?? '',
-      role: user.role === UserRole.MENTOR ? 'Mentor' : user.role === UserRole.LEARNER ? 'Learner' : null,
+      role: user.role === UserRole.MENTOR ? 'Mentor' : user.role === UserRole.LEARNER ? 'Learner' : user.role === UserRole.GUEST ? 'Guest' : null,
       hobby: user.hobby,
       bio: user.bio,
       handle: user.handle,

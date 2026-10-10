@@ -39,6 +39,11 @@ export interface QuizAnswer {
 }
 
 /** Learner enrolls directly. Returns a fresh session with the LEARNER role. */
+/** Continue as Guest: full access, but no XP and never ranked. */
+export function continueAsGuestRequest(): Promise<AuthResponse> {
+  return apiRequest<AuthResponse>('/onboarding/continue-guest', { method: 'POST' });
+}
+
 export function enrollAsLearnerRequest(): Promise<AuthResponse> {
   return apiRequest<AuthResponse>('/onboarding/enroll-learner', { method: 'POST' });
 }

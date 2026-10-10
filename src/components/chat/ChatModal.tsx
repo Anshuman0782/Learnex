@@ -391,7 +391,7 @@ export const ChatModal: React.FC = () => {
               <View style={{ flex: 1 }}>
                 <Text style={styles.peerName} numberOfLines={1}>{peer.name}</Text>
                 <Text style={styles.peerSub}>
-                  {conv?.otherUser.isOnline ? 'Online' : peer.role === 'Mentor' ? 'Mentor' : 'Learner'}
+                  {conv?.otherUser.isOnline ? 'Online' : peer.role === 'Mentor' ? 'Mentor' : peer.role === 'Guest' ? 'Guest' : 'Learner'}
                 </Text>
               </View>
               </TouchableOpacity>

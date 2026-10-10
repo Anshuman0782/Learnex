@@ -12,7 +12,7 @@ import { RealtimeGateway } from '../realtime/realtime.gateway.js';
 export interface CommunityMemberView {
   id: string;
   name: string;
-  role: 'Mentor' | 'Learner';
+  role: 'Mentor' | 'Learner' | 'Guest';
   isAdmin: boolean;
 }
 
@@ -116,7 +116,7 @@ export class CommunitiesService {
       list.push({
         id: m.user.id,
         name: m.user.name,
-        role: m.user.role === UserRole.MENTOR ? 'Mentor' : 'Learner',
+        role: m.user.role === UserRole.MENTOR ? 'Mentor' : m.user.role === UserRole.GUEST ? 'Guest' : 'Learner',
         isAdmin: m.role === CommunityRole.ADMIN,
       });
       byCommunity.set(m.communityId, list);

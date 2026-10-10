@@ -48,6 +48,23 @@ export class OnboardingService {
     private readonly auth: AuthService,
   ) {}
 
+  /**
+   * Guest path: full access to posting, commenting and chat — but no XP and no
+   * leaderboard. Only for accounts that haven't chosen Learner / Mentor yet
+   * (a ranked member can't drop to Guest). Guests can upgrade any time.
+   */
+  async continueAsGuest(userId: string): Promise<AuthResult> {
+    const user = await this.users.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException('Account not found');
+    }
+    if (user.role === UserRole.LEARNER || user.role === UserRole.MENTOR) {
+      throw new BadRequestException('You already have a Learner / Mentor account');
+    }
+    const updated = await this.users.update(user.id, { role: UserRole.GUEST });
+    return this.auth.issueSession(updated);
+  }
+
   /** Learner path: enroll directly. Reissues a session so the JWT carries the new role. */
   async enrollAsLearner(userId: string): Promise<AuthResult> {
     const user = await this.users.findById(userId);

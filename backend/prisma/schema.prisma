@@ -15,6 +15,9 @@ datasource db {
 enum UserRole {
   LEARNER
   MENTOR
+  /// Can post, comment and chat like anyone else, but earns no XP and is never
+  /// ranked. Can become a Learner or Mentor at any time.
+  GUEST
 }
 
 /// Core account record. Auth-specific fields (password, tokens) are filled in

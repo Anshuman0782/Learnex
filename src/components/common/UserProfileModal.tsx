@@ -371,7 +371,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                   )}
                   <View style={styles.aboutChip}>
                     <Ionicons name={isMentor ? 'star' : 'school'} size={12} color="#4F46E5" />
-                    <Text style={styles.aboutChipText}>{isMentor ? 'Mentor' : 'Learner'}</Text>
+                    <Text style={styles.aboutChipText}>{isMentor ? 'Mentor' : (profile?.role ?? user.role) === 'Guest' ? 'Guest' : 'Learner'}</Text>
                   </View>
                   {!!profile && (
                     <View style={styles.aboutChip}>

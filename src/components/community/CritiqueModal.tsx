@@ -384,7 +384,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                     )}
                   </View>
                   <Text style={styles.creatorSubText}>
-                    {post.authorRole === 'Mentor' ? 'Verified Mentor' : 'Learner'} • {post.authorSkill || 'Member'}
+                    {post.authorRole === 'Mentor' ? 'Verified Mentor' : post.authorRole === 'Guest' ? 'Guest' : 'Learner'} • {post.authorSkill || 'Member'}
                   </Text>
                 </View>
               </TouchableOpacity>

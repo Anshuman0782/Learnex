@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { GuestUpgradeBanner } from '../../components/common/GuestUpgradeBanner';
 import { useApp } from '../../context/AppContext';
 import { Avatar, ConfirmModal } from '../../components/common';
 import { EditProfileModal } from '../../components/profile/EditProfileModal';
@@ -79,6 +80,7 @@ export const ProfilePlaceholderScreen: React.FC<ProfilePlaceholderScreenProps> =
     setPostPrivacy,
     logout,
     showDialog,
+    closeMyProfile,
   } = useApp();
 
   const [activeSection, setActiveSection] = useState<SectionKey>('hub');
@@ -323,7 +325,7 @@ export const ProfilePlaceholderScreen: React.FC<ProfilePlaceholderScreenProps> =
             {/* User Static Role Badge */}
             <View style={[styles.roleChip, isMentor && styles.roleChipMentor]}>
               <Text style={[styles.roleChipText, isMentor && styles.roleChipTextMentor]}>
-                {isMentor ? '✨ Mentor' : '🎓 Learner'}
+                {isMentor ? '✨ Mentor' : selectedRole === 'Guest' ? '👤 Guest' : '🎓 Learner'}
               </Text>
             </View>
 
@@ -351,7 +353,7 @@ export const ProfilePlaceholderScreen: React.FC<ProfilePlaceholderScreenProps> =
               <View style={styles.avatarRingWrapper}>
                 <Avatar
                   uri={user?.avatarUrl}
-                  name={user?.name || 'Anshuman'}
+                  name={user?.name || 'LERNEX'}
                   size={72}
                   showRing={false}
                 />
@@ -392,12 +394,17 @@ export const ProfilePlaceholderScreen: React.FC<ProfilePlaceholderScreenProps> =
                   </View>
                 ) : (
                   <View style={styles.learnerVerifiedBadge}>
-                    <Text style={styles.learnerVerifiedBadgeText}>Learner</Text>
+                    <Text style={styles.learnerVerifiedBadgeText}>{selectedRole === 'Guest' ? 'Guest' : 'Learner'}</Text>
                   </View>
                 )}
               </View>
 
               {!!user?.bio && <Text style={styles.userBioText}>{user.bio}</Text>}
+
+              {/* Guests: how to join XP / leaderboards */}
+              <View style={{ marginTop: 10 }}>
+                <GuestUpgradeBanner onBeforeUpgrade={closeMyProfile} />
+              </View>
 
               {/* Primary Skill Pill */}
               <View style={styles.trackPillsRow}>

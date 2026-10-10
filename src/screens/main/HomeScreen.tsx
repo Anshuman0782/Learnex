@@ -537,7 +537,7 @@ export const HomeScreen: React.FC = () => {
                       <Avatar uri={u.avatarUrl} name={u.name} size={44} showRing={u.role === 'Mentor'} />
                       <View style={styles.personInfo}>
                         <Text style={styles.personName} numberOfLines={1}>{u.name}</Text>
-                        <Text style={styles.personRole}>{u.role === 'Mentor' ? 'Verified Mentor' : 'Learner'}</Text>
+                        <Text style={styles.personRole}>{u.role === 'Mentor' ? 'Verified Mentor' : u.role === 'Guest' ? 'Guest' : 'Learner'}</Text>
                       </View>
                       <Ionicons name="chevron-forward" size={18} color="#CBD5E1" />
                     </TouchableOpacity>

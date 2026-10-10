@@ -4,7 +4,7 @@ export interface ChatUser {
   id: string;
   name: string;
   avatarUrl: string;
-  role: 'Learner' | 'Mentor' | null;
+  role: 'Learner' | 'Mentor' | 'Guest' | null;
   isOnline: boolean;
   /** Calls are allowed only between mutual followers. */
   canCall?: boolean;

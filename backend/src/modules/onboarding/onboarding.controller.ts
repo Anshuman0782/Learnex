@@ -13,6 +13,13 @@ import type { AuthenticatedUser } from '../auth/types/authenticated-user.type.js
 export class OnboardingController {
   constructor(private readonly onboarding: OnboardingService) {}
 
+  /** Continue as Guest (no XP, not ranked). Returns a fresh session. */
+  @HttpCode(HttpStatus.OK)
+  @Post('continue-guest')
+  continueAsGuest(@CurrentUser() user: AuthenticatedUser): Promise<AuthResult> {
+    return this.onboarding.continueAsGuest(user.userId);
+  }
+
   /** Learner enrolls directly. Returns a fresh session with the new role. */
   @HttpCode(HttpStatus.OK)
   @Post('enroll-learner')

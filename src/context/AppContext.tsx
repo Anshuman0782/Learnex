@@ -33,7 +33,7 @@ import {
   type ApiUser,
   type AuthResponse,
 } from '../api/auth.api';
-import { enrollAsLearnerRequest } from '../api/onboarding.api';
+import { enrollAsLearnerRequest, continueAsGuestRequest } from '../api/onboarding.api';
 import {
   getRecommendedCommunitiesRequest,
   getJoinedCommunitiesRequest,
@@ -280,6 +280,8 @@ interface AppContextType {
   setPostPrivacy: (postId: string, isPrivate: boolean) => Promise<CommunityPost>;
   createPost: (payload: CreatePostPayload) => Promise<void>;
   enrollAsLearner: () => Promise<void>;
+  /** Guest: post / comment / chat like anyone, but no XP and not ranked. */
+  continueAsGuest: () => Promise<void>;
   applyMentorSession: (session: AuthResponse) => Promise<void>;
   logout: () => Promise<void>;
   getRecommendedCommunities: () => Community[];
@@ -846,7 +848,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     phone: api.phone ?? '',
     dob: api.dob ?? '',
     hobby: api.hobby ?? 'Music',
-    role: api.role === 'MENTOR' ? 'Mentor' : api.role === 'LEARNER' ? 'Learner' : undefined,
+    role: api.role === 'MENTOR' ? 'Mentor' : api.role === 'LEARNER' ? 'Learner' : api.role === 'GUEST' ? 'Guest' : undefined,
     joinedCommunities: [],
     avatarUrl: avatarOverride || api.avatarUrl || user?.avatarUrl || undefined,
     streakDays: user?.streakDays ?? 0,
@@ -1573,6 +1575,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   /** Learner path: enroll directly on the server, then apply the returned session. */
+  const continueAsGuest = async (): Promise<void> => {
+    const { user: apiUser, tokens } = await continueAsGuestRequest();
+    await saveTokens(tokens);
+    applySession(apiUser);
+  };
+
   const enrollAsLearner = async (): Promise<void> => {
     const { user: apiUser, tokens } = await enrollAsLearnerRequest();
     await saveTokens(tokens);
@@ -1705,6 +1713,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setPostPrivacy,
         createPost,
         enrollAsLearner,
+        continueAsGuest,
         applyMentorSession,
         logout,
         getRecommendedCommunities,

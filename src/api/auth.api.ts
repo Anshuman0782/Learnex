@@ -6,7 +6,7 @@ export interface ApiUser {
   email: string;
   phone: string | null;
   name: string;
-  role: 'LEARNER' | 'MENTOR' | null;
+  role: 'LEARNER' | 'MENTOR' | 'GUEST' | null;
   dob: string | null;
   hobby: string | null;
   avatarUrl: string | null;

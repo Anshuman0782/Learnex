@@ -29,8 +29,8 @@ const POST_TYPE_TO_API: Record<PostType, PostTypeInput> = {
   CRITIQUE_REQUEST: 'critique_request',
 };
 
-const roleLabel = (role: UserRole | null): 'Mentor' | 'Learner' =>
-  role === UserRole.MENTOR ? 'Mentor' : 'Learner';
+const roleLabel = (role: UserRole | null): 'Mentor' | 'Learner' | 'Guest' =>
+  role === UserRole.MENTOR ? 'Mentor' : role === UserRole.GUEST ? 'Guest' : 'Learner';
 
 @Injectable()
 export class PostsService {
@@ -663,7 +663,7 @@ export class PostsService {
         id: comment.id,
         postId,
         authorName: author?.name ?? 'Someone',
-        authorRole: role === UserRole.MENTOR ? 'Mentor' : 'Learner',
+        authorRole: roleLabel(role),
         authorAvatar: author?.avatarUrl ?? '',
         timeAgo: 'Just now',
         text: comment.text,

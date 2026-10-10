@@ -723,6 +723,9 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
       }),
     ]);
     if (!member) throw new ForbiddenException('Join this circle first to vote.');
+    if (user?.role === 'GUEST') {
+      throw new ForbiddenException('Challenges award XP, so they’re for Learners and Mentors. Switch from Guest in your profile to join.');
+    }
     const role = roleLabel(user?.role ?? null);
     if (!role || !this.tracksOf(e)[role]) {
       throw new ForbiddenException(`This event has no challenge for ${role ?? 'your role'}s.`);

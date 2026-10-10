@@ -7,7 +7,7 @@ export interface AdminAccount {
   name: string;
   email: string;
   avatarUrl: string;
-  role: 'Learner' | 'Mentor' | null;
+  role: 'Learner' | 'Mentor' | 'Guest' | null;
   isOwner: boolean;
   grantedAt: string | null;
   grantedByName: string | null;
@@ -18,7 +18,7 @@ export interface AdminUserResult {
   name: string;
   email: string;
   avatarUrl: string;
-  role: 'Learner' | 'Mentor' | null;
+  role: 'Learner' | 'Mentor' | 'Guest' | null;
   isAdmin: boolean;
   isOwner: boolean;
 }
@@ -50,6 +50,8 @@ export interface AdminDashboard {
     total: number;
     learners: number;
     mentors: number;
+    /** Guests: full access, no XP, never ranked. */
+    guests: number;
     onboarding: number;
     admins: number;
     newLast7Days: number;

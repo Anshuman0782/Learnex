@@ -45,10 +45,11 @@ export class AdminStatsService {
     const liveUser: Prisma.UserWhereInput = { deletedAt: null };
 
     // ---- Users ----
-    const [totalUsers, learners, mentors, admins, usersBefore30, recentUsers] = await Promise.all([
+    const [totalUsers, learners, mentors, guests, admins, usersBefore30, recentUsers] = await Promise.all([
       this.prisma.user.count({ where: liveUser }),
       this.prisma.user.count({ where: { ...liveUser, role: UserRole.LEARNER } }),
       this.prisma.user.count({ where: { ...liveUser, role: UserRole.MENTOR } }),
+      this.prisma.user.count({ where: { ...liveUser, role: UserRole.GUEST } }),
       this.prisma.user.count({ where: { ...liveUser, isAdmin: true } }),
       this.prisma.user.count({ where: { ...liveUser, createdAt: { lt: start30 } } }),
       this.prisma.user.findMany({
@@ -194,7 +195,8 @@ export class AdminStatsService {
         total: totalUsers,
         learners,
         mentors,
-        onboarding: totalUsers - learners - mentors,
+        guests,
+        onboarding: totalUsers - learners - mentors - guests,
         admins,
         newLast7Days: growth.slice(-7).reduce((s, g) => s + g.signups, 0),
         newLast30Days: growth.reduce((s, g) => s + g.signups, 0),

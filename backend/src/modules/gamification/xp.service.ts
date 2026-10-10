@@ -87,6 +87,7 @@ export class XpService implements OnModuleInit {
       select: { role: true, deletedAt: true },
     });
     if (!user || user.deletedAt) return 0;
+    if (user.role === UserRole.GUEST) return 0; // guests never earn XP
     const role = user.role === UserRole.MENTOR ? 'Mentor' : user.role === UserRole.LEARNER ? 'Learner' : null;
 
     let total = 0;
@@ -121,6 +122,8 @@ export class XpService implements OnModuleInit {
     dedupeKey?: string,
     ruleKey?: string,
   ): Promise<number> {
+    // Every XP grant (rules, quests, events) passes through here.
+    if (await this.isGuest(userId)) return 0;
     try {
       await this.prisma.xpEvent.create({ data: { userId, source, amount, dedupeKey, ruleKey } });
       return amount;
@@ -152,8 +155,15 @@ export class XpService implements OnModuleInit {
     return agg._sum.amount ?? 0;
   }
 
+  /** Guests take part in everything except the XP / ranking game. */
+  async isGuest(userId: string): Promise<boolean> {
+    const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    return u?.role === UserRole.GUEST;
+  }
+
   /** Grant a badge once (idempotent). Returns true if newly awarded. */
   async awardBadge(userId: string, code: string): Promise<boolean> {
+    if (await this.isGuest(userId)) return false;
     try {
       await this.prisma.badge.create({ data: { userId, code } });
       return true;
@@ -171,6 +181,7 @@ export class XpService implements OnModuleInit {
    * Idempotent per day.
    */
   async recordActivity(userId: string): Promise<void> {
+    if (await this.isGuest(userId)) return; // no streaks / check-in XP for guests
     const today = utcDay();
     const streak = await this.prisma.streak.findUnique({ where: { userId } });
 

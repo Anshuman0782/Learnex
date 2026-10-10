@@ -5,7 +5,7 @@ export interface PublicProfile {
   id: string;
   name: string;
   avatarUrl: string;
-  role: 'Learner' | 'Mentor' | null;
+  role: 'Learner' | 'Mentor' | 'Guest' | null;
   hobby: string | null;
   bio: string | null;
   handle: string | null;
@@ -32,7 +32,7 @@ export interface FollowUserRow {
   id: string;
   name: string;
   avatarUrl: string;
-  role: 'Learner' | 'Mentor' | null;
+  role: 'Learner' | 'Mentor' | 'Guest' | null;
   isFollowing?: boolean;
   isSelf?: boolean;
 }

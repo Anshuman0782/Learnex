@@ -1,4 +1,5 @@
-export type UserRole = 'Learner' | 'Mentor';
+/** Guest: full access to posting / commenting / chat, but no XP and never ranked. */
+export type UserRole = 'Learner' | 'Mentor' | 'Guest';
 
 export interface User {
   id: string;
@@ -74,7 +75,7 @@ export interface UserRow {
   id: string;
   name: string;
   avatarUrl: string;
-  role: 'Learner' | 'Mentor' | null;
+  role: 'Learner' | 'Mentor' | 'Guest' | null;
 }
 
 export interface Skill {

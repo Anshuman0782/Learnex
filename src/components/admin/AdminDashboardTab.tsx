@@ -42,6 +42,7 @@ export const AdminDashboardTab: React.FC<{ data: AdminDashboard }> = ({ data }) 
           <StatTile label="New this week" value={data.users.newLast7Days} icon="person-add" color="#16A34A" />
           <StatTile label="Learners" value={data.users.learners} icon="school" color="#4F46E5" />
           <StatTile label="Mentors" value={data.users.mentors} icon="ribbon" color="#7C3AED" />
+          <StatTile label="Guests" value={data.users.guests ?? 0} icon="person-outline" color="#64748B" />
         </TileGrid>
         <Text style={styles.chartTitle}>New sign-ups per day (last 30 days)</Text>
         <BarChart data={growthChart} color="#16A34A" />
