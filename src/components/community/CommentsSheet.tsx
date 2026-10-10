@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
-  Platform,
   Alert,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -80,7 +79,7 @@ export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: pos
       <View style={styles.overlay}>
         <TouchableOpacity style={styles.backdropTouch} activeOpacity={1} onPress={onClose} />
         <KeyboardAvoidingView
-          style={[styles.sheet, { paddingBottom: composerPad }]}
+          style={styles.sheet}
           behavior="padding" automaticOffset
         >
           <View style={styles.dragPill} />
@@ -193,7 +192,7 @@ export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: pos
           </ScrollView>
 
           {/* Composer */}
-          <View style={styles.composer}>
+          <View style={[styles.composer, { paddingBottom: composerPad }]}>
             <TextInput
               value={text}
               onChangeText={setText}
@@ -221,7 +220,6 @@ const styles = StyleSheet.create({
     borderTopRightRadius: borderRadius.xxl,
     maxHeight: '80%',
     minHeight: '55%',
-    paddingBottom: Platform.OS === 'ios' ? 24 : 12,
   },
   dragPill: {
     width: 40,

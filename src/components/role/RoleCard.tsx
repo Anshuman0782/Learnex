@@ -27,7 +27,7 @@ export const RoleCard: React.FC<RoleCardProps> = ({ role, isSelected = false, on
         <View style={[styles.iconCircle, { backgroundColor: role.iconBgColor }]}>
           <Ionicons
             name={role.iconName as keyof typeof Ionicons.glyphMap}
-            size={32}
+            size={26}
             color={role.iconColor}
           />
         </View>
@@ -49,6 +49,9 @@ export const RoleCard: React.FC<RoleCardProps> = ({ role, isSelected = false, on
         </View>
       </View>
 
+      {/* Details only for the selected card, so every option fits on one screen */}
+      {isSelected && (
+      <>
       <Text style={styles.description}>{role.description}</Text>
 
       {/* Perks Checklist */}
@@ -66,6 +69,8 @@ export const RoleCard: React.FC<RoleCardProps> = ({ role, isSelected = false, on
           </View>
         ))}
       </View>
+      </>
+      )}
     </TouchableOpacity>
   );
 };
@@ -76,8 +81,8 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xxl,
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
-    padding: spacing.xl,
-    marginBottom: spacing.lg,
+    padding: spacing.base,
+    marginBottom: spacing.md,
   },
   cardSelected: {
     borderColor: colors.primary,
@@ -87,12 +92,11 @@ const styles = StyleSheet.create({
   topRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.md,
   },
   iconCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: spacing.md,
@@ -128,7 +132,8 @@ const styles = StyleSheet.create({
   description: {
     fontSize: typography.sizes.sm,
     color: colors.textSecondary,
-    lineHeight: 22,
+    lineHeight: 20,
+    marginTop: spacing.md,
     marginBottom: spacing.md,
   },
   perksList: {

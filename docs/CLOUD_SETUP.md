@@ -49,7 +49,7 @@ Render deploys from GitHub.
 3. Fill in the values it asks for:
    - `DATABASE_URL` → the Neon string from Step 2
    - `CLOUDINARY_URL` → from Step 3
-   - `ADMIN_EMAILS` → `anshumansarkar600@gmail.com` (owner/admin login emails, comma-separated)
+   - `ADMIN_EMAILS` → `<your admin email>` (owner/admin login emails, comma-separated)
    - `TURN_*` → leave empty (optional, for calls on strict mobile networks)
 4. **Apply**. The first deploy takes a few minutes. It creates the database
    tables automatically. When it says **Live**, open
@@ -64,7 +64,7 @@ email. Render's free plan blocks normal email (SMTP), so LERNEX uses Brevo's API
 
 1. Sign up at <https://www.brevo.com> (free plan: 300 emails/day, no card).
 2. **Senders, Domains & Dedicated IPs → Senders → Add a sender** → your Gmail
-   (e.g. `anshumansarkar600@gmail.com`) → confirm the email Brevo sends you.
+   (the address you want emails sent from) → confirm the email Brevo sends you.
 3. **SMTP & API → API Keys → Generate a new API key** → copy it.
 4. Render → your service → **Environment** → add:
    - `BREVO_API_KEY` = the key

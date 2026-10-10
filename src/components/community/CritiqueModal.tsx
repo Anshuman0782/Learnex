@@ -189,7 +189,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
     if (isSubmittingMentorCritique && !isMentor) {
       Alert.alert(
         'Mentor Feature',
-        'You are currently in Learner persona. Switch to "Mentor Pro" to submit verified critiques and video breakdowns.'
+        'Only verified Mentors can submit critiques and video breakdowns.'
       );
       return;
     }
@@ -577,7 +577,9 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                               </View>
                             ) : (
                               <View style={styles.learnerBadgeSmall}>
-                                <Text style={styles.learnerBadgeSmallText}>Learner</Text>
+                                <Text style={styles.learnerBadgeSmallText}>
+                                  {comment.authorRole === 'Guest' ? 'Guest' : 'Learner'}
+                                </Text>
                               </View>
                             )}
                           </View>

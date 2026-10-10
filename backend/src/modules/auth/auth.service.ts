@@ -326,7 +326,7 @@ export class AuthService {
       newPhone: phoneChanges ? newPhone : null,
     });
     await this.mail.sendCode({ email: user.email, name: user.name }, 'change', code);
-    // Mask the address we sent to (e.g. an***@gmail.com).
+    // Mask the address we sent to (e.g. jo***@example.com).
     const [local, domain] = user.email.split('@');
     return { sent: true, to: `${local.slice(0, 2)}***@${domain}` };
   }

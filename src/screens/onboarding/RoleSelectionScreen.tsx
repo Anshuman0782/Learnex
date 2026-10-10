@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -9,8 +8,23 @@ import { useApp } from '../../context/AppContext';
 import { Header, Button } from '../../components/common';
 import { RoleCard } from '../../components/role/RoleCard';
 import { ROLE_OPTIONS } from '../../data/mockData';
-import { UserRole } from '../../types';
+import { RoleOption, UserRole } from '../../types';
 import { colors, typography, spacing } from '../../theme';
+
+const GUEST_OPTION: RoleOption = {
+  id: 'Guest',
+  title: 'Continue as Guest',
+  subtitle: 'Explore • No XP • No ranking',
+  description: 'Use the app like everyone else, without the XP and leaderboard game.',
+  iconName: 'person-outline',
+  iconBgColor: '#F1F5F9',
+  iconColor: '#475569',
+  perks: [
+    'Post, comment, chat and join circles',
+    'No XP, streaks, challenges or leaderboards',
+    'Become a Learner or Mentor any time from your profile',
+  ],
+};
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'RoleSelection'>;
 
@@ -25,10 +39,11 @@ export const RoleSelectionScreen: React.FC = () => {
     selectedRole && selectedRole !== 'Guest' ? selectedRole : 'Learner'
   );
   const [loading, setLoading] = useState(false);
-  const [guestLoading, setGuestLoading] = useState(false);
+  // Guests upgrading only choose between Learner and Mentor.
+  const options = isUpgrading ? ROLE_OPTIONS : [...ROLE_OPTIONS, GUEST_OPTION];
 
   const handleGuest = async () => {
-    setGuestLoading(true);
+    setLoading(true);
     try {
       await continueAsGuest();
       navigation.reset({ index: 0, routes: [{ name: 'Main', params: { screen: 'HomeTab' } }] });
@@ -40,7 +55,7 @@ export const RoleSelectionScreen: React.FC = () => {
         confirmText: 'OK',
       });
     } finally {
-      setGuestLoading(false);
+      setLoading(false);
     }
   };
 
@@ -49,6 +64,10 @@ export const RoleSelectionScreen: React.FC = () => {
   };
 
   const handleConfirm = async () => {
+    if (currentSelected === 'Guest') {
+      await handleGuest();
+      return;
+    }
     if (currentSelected === 'Mentor') {
       navigation.navigate('MentorQuiz');
       return;
@@ -81,10 +100,8 @@ export const RoleSelectionScreen: React.FC = () => {
       <Header onBack={() => navigation.goBack()} title="" />
 
       <ScrollView
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: Math.max(insets.bottom + 20, 32) },
-        ]}
+        style={{ flex: 1 }}
+        contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
         {/* Step Badge */}
@@ -102,7 +119,7 @@ export const RoleSelectionScreen: React.FC = () => {
         </View>
 
         <View style={styles.cardsContainer}>
-          {ROLE_OPTIONS.map((role) => (
+          {options.map((role) => (
             <RoleCard
               key={role.id}
               role={role}
@@ -112,85 +129,44 @@ export const RoleSelectionScreen: React.FC = () => {
           ))}
         </View>
 
-        {currentSelected === 'Mentor' && (
-          <View style={styles.mentorNoticeBox}>
-            <Text style={styles.mentorNoticeText}>
-              📝 <Text style={{ fontWeight: 'bold' }}>Mentor Assessment:</Text> You will take a 5-question test. Score at least 4/5 to qualify as a Mentor; otherwise, you'll join as a Learner.
-            </Text>
-          </View>
-        )}
-
-        {currentSelected && (
-          <View style={styles.buttonWrapper}>
-            <Button
-              title={
-                currentSelected === 'Mentor'
-                  ? 'Take Mentor Test (5 Qs) →'
-                  : 'Continue as Learner →'
-              }
-              onPress={handleConfirm}
-              loading={loading && currentSelected === 'Learner'}
-              fullWidth
-              size="lg"
-            />
-          </View>
-        )}
-
-        {/* Guest: explore without the XP / ranking game */}
-        {!isUpgrading && (
-          <>
-            <View style={styles.orRow}>
-              <View style={styles.orLine} />
-              <Text style={styles.orText}>or</Text>
-              <View style={styles.orLine} />
-            </View>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              disabled={guestLoading || loading}
-              onPress={handleGuest}
-              style={styles.guestCard}
-            >
-              <View style={styles.guestIcon}>
-                {guestLoading ? (
-                  <ActivityIndicator color="#475569" />
-                ) : (
-                  <Ionicons name="person-outline" size={22} color="#475569" />
-                )}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.guestTitle}>Continue as Guest</Text>
-                <Text style={styles.guestText}>
-                  Post, comment, chat and join circles like everyone else. Guests don’t earn XP and aren’t on
-                  the leaderboards. You can become a Learner or Mentor any time from your profile.
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
-            </TouchableOpacity>
-          </>
-        )}
       </ScrollView>
+
+      {/* Pinned action — always visible, clear of the phone's navigation bar */}
+      {currentSelected && (
+        <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) + 12 }]}>
+          {currentSelected === 'Mentor' && (
+            <Text style={styles.footerHint}>
+              5-question test · score 4/5 to qualify, otherwise you join as a Learner.
+            </Text>
+          )}
+          <Button
+            title={
+              currentSelected === 'Mentor'
+                ? 'Take Mentor Test (5 Qs) →'
+                : currentSelected === 'Guest'
+                ? 'Continue as Guest →'
+                : 'Continue as Learner →'
+            }
+            onPress={handleConfirm}
+            loading={loading}
+            fullWidth
+            size="lg"
+          />
+        </View>
+      )}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  orRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, marginBottom: 12 },
-  orLine: { flex: 1, height: 1, backgroundColor: '#E2E8F0' },
-  orText: { fontSize: 12, fontWeight: '700', color: '#94A3B8' },
-  guestCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: '#CBD5E1',
-    padding: 14,
+  footer: {
+    paddingHorizontal: spacing.xl,
+    paddingTop: spacing.md,
+    backgroundColor: '#F8FAFC',
+    borderTopWidth: 1,
+    borderTopColor: '#EEF2F7',
   },
-  guestIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
-  guestTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A' },
-  guestText: { fontSize: 12, color: '#64748B', lineHeight: 17, marginTop: 2 },
+  footerHint: { fontSize: 12, color: '#92400E', textAlign: 'center', marginBottom: 8, lineHeight: 17 },
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
@@ -198,7 +174,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.xs,
-    flexGrow: 1,
+    paddingBottom: spacing.sm,
   },
   stepBadge: {
     alignSelf: 'center',
@@ -215,7 +191,7 @@ const styles = StyleSheet.create({
   },
   headerSection: {
     alignItems: 'center',
-    marginBottom: spacing.xl,
+    marginBottom: spacing.lg,
   },
   title: {
     fontSize: typography.sizes.display,
@@ -233,21 +209,5 @@ const styles = StyleSheet.create({
   },
   cardsContainer: {
     marginBottom: spacing.base,
-  },
-  mentorNoticeBox: {
-    backgroundColor: '#FEF3C7',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-    borderRadius: 12,
-    padding: spacing.md,
-    marginBottom: spacing.base,
-  },
-  mentorNoticeText: {
-    fontSize: typography.sizes.xs + 1,
-    color: '#92400E',
-    lineHeight: 18,
-  },
-  buttonWrapper: {
-    marginTop: spacing.xs,
   },
 });

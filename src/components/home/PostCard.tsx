@@ -73,7 +73,7 @@ export const PostCard: React.FC<PostCardProps> = ({
     toggleCommunityJoin,
   } = useApp();
   const [descExpanded, setDescExpanded] = React.useState(false);
-  const [photoComments, setPhotoComments] = React.useState(false);
+  const [sheetComments, setSheetComments] = React.useState(false);
   const likeScale = useRef(new Animated.Value(1)).current;
 
   const circleNames = post.communityNames ?? [];
@@ -94,6 +94,9 @@ export const PostCard: React.FC<PostCardProps> = ({
   const isAudio = !isPhoto && (post.postType === 'audio' || (!!post.audioUrl && !post.videoUrl));
   const hasVideo = !isPhoto && !isAudio && (!!post.videoThumbnail || !!post.videoUrl);
   const isQuote = !isPhoto && !isAudio && !hasVideo;
+  // Photos and discussions have no detail page — their comments open in a sheet.
+  const usesSheet = isPhoto || isQuote;
+  const openComments = usesSheet ? () => setSheetComments(true) : onCommentPress || onPress;
   const isThisAudioPlaying = audioPost?.id === post.id && isAudioPlaying;
   const isPlayingInline = isActive && !!player && !!post.videoUrl && videoStarted;
   const firstTag = (post.tag || '').split(' ').find(Boolean);
@@ -324,7 +327,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           </Animated.View>
           <Text style={[styles.actionText, post.isLiked && { color: '#F43F5E' }]}>{compact(post.likesCount || 0)}</Text>
         </TouchableOpacity>
-        <TouchableOpacity activeOpacity={0.7} onPress={isPhoto ? () => setPhotoComments(true) : onCommentPress || onPress} style={styles.action}>
+        <TouchableOpacity activeOpacity={0.7} onPress={openComments} style={styles.action}>
           <Ionicons name="chatbubble-ellipses-outline" size={22} color="#0F172A" />
           <Text style={styles.actionText}>{compact(post.commentsCount ?? post.comments?.length ?? 0)}</Text>
         </TouchableOpacity>
@@ -369,7 +372,7 @@ export const PostCard: React.FC<PostCardProps> = ({
 
       {/* Mentor critique highlight */}
       {firstMentorCritique && (
-        <TouchableOpacity activeOpacity={0.85} onPress={isPhoto ? () => setPhotoComments(true) : onCommentPress || onPress} style={styles.critique}>
+        <TouchableOpacity activeOpacity={0.85} onPress={openComments} style={styles.critique}>
           <View style={styles.critiqueBar} />
           <Avatar uri={firstMentorCritique.authorAvatar} name={firstMentorCritique.authorName} size={28} showRing />
           <View style={{ flex: 1 }}>
@@ -386,7 +389,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           </View>
         </TouchableOpacity>
       )}
-      {isPhoto && <CommentsSheet visible={photoComments} post={post} onClose={() => setPhotoComments(false)} />}
+      {usesSheet && <CommentsSheet visible={sheetComments} post={post} onClose={() => setSheetComments(false)} />}
     </View>
   );
 };

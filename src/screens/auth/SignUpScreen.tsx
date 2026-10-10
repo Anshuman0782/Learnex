@@ -230,7 +230,7 @@ export const SignUpScreen: React.FC = () => {
 
           <Input
             label="Full Name"
-            placeholder="e.g. Anshuman Sarkar"
+            placeholder="Enter your full name"
             value={fullName}
             onChangeText={(text) => {
               setFullName(text);
@@ -242,7 +242,7 @@ export const SignUpScreen: React.FC = () => {
 
           <Input
             label="Email Address"
-            placeholder="e.g. anshuman@gmail.com"
+            placeholder="Enter your email address"
             value={email}
             onChangeText={(text) => {
               setEmail(text);
@@ -256,7 +256,7 @@ export const SignUpScreen: React.FC = () => {
 
           <Input
             label="Phone Number"
-            placeholder="e.g. +91 98765 43210"
+            placeholder="Enter number with country code"
             value={phoneNumber}
             onChangeText={(text) => {
               setPhoneNumber(text);
@@ -269,7 +269,7 @@ export const SignUpScreen: React.FC = () => {
 
           <Input
             label="Password"
-            placeholder="At least 6 characters"
+            placeholder="At least 8 characters"
             value={password}
             onChangeText={(text) => {
               setPassword(text);
@@ -282,7 +282,7 @@ export const SignUpScreen: React.FC = () => {
 
           <Input
             label="Date of Birth"
-            placeholder="DD/MM/YYYY — or tap the calendar"
+            placeholder="DD/MM/YYYY"
             value={dob}
             onChangeText={handleDobChange}
             keyboardType="numeric"

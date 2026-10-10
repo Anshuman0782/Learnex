@@ -65,8 +65,9 @@ export const RepostModal: React.FC<RepostModalProps> = ({ visible, post, circles
       <View style={styles.overlay}>
         <KeyboardAvoidingView
           behavior="padding" automaticOffset
-          style={[styles.sheet, { paddingBottom: composerPad }]}
+          style={styles.sheet}
         >
+          <View style={[styles.sheetBody, { paddingBottom: composerPad }]}>
           <View style={styles.dragHandle} />
           <View style={styles.header}>
             <View style={styles.headerLeft}>
@@ -153,6 +154,7 @@ export const RepostModal: React.FC<RepostModalProps> = ({ visible, post, circles
               <Text style={styles.submitText}>{busy ? 'Reposting…' : 'Repost to feed'}</Text>
             </LinearGradient>
           </TouchableOpacity>
+          </View>
         </KeyboardAvoidingView>
       </View>
     </Modal>
@@ -171,10 +173,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: borderRadius.xxl,
     borderTopRightRadius: borderRadius.xxl,
+    maxHeight: '86%',
+  },
+  sheetBody: {
+    flexShrink: 1,
     paddingHorizontal: spacing.base,
     paddingTop: spacing.xs + 2,
-    paddingBottom: spacing.base,
-    maxHeight: '86%',
   },
   dragHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: '#CBD5E1', alignSelf: 'center', marginBottom: 10 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.sm },
@@ -210,7 +214,7 @@ const styles = StyleSheet.create({
   circleChipActive: { backgroundColor: '#7C3AED' },
   circleChipText: { fontSize: 12, fontWeight: '600', color: '#334155' },
   circleChipTextActive: { color: '#FFFFFF', fontWeight: 'bold' },
-  submitBtn: { marginTop: spacing.sm, borderRadius: borderRadius.full, overflow: 'hidden' },
-  submitGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 13 },
+  submitBtn: { marginTop: spacing.md, borderRadius: 14, overflow: 'hidden' },
+  submitGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 15 },
   submitText: { fontSize: 14, fontWeight: 'bold', color: '#FFFFFF' },
 });

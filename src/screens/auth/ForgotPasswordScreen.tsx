@@ -104,7 +104,7 @@ export const ForgotPasswordScreen: React.FC = () => {
               </Text>
               <Input
                 label="Email or Phone"
-                placeholder="e.g. you@example.com"
+                placeholder="Enter your email address"
                 value={identifier}
                 onChangeText={setIdentifier}
                 leftIcon="person-outline"

@@ -128,7 +128,7 @@ export const ContactChangeSheet: React.FC<Props> = ({ visible, field, onClose })
                     setValue(t);
                     setError('');
                   }}
-                  placeholder={isEmail ? 'new@email.com' : '+91 98765 43210'}
+                  placeholder={isEmail ? 'New email address' : 'New phone number with country code'}
                   placeholderTextColor="#94A3B8"
                   keyboardType={isEmail ? 'email-address' : 'phone-pad'}
                   autoCapitalize="none"

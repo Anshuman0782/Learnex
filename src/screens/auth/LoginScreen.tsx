@@ -111,7 +111,7 @@ export const LoginScreen: React.FC = () => {
           <View style={styles.formSection}>
             <Input
               label="Email, Phone, or Username"
-              placeholder="e.g. anshuman@gmail.com"
+              placeholder="Email address"
               value={identifier}
               onChangeText={(text) => {
                 setIdentifier(text);
