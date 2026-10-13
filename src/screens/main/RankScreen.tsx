@@ -19,7 +19,10 @@ import { getLeaderboardCategoriesRequest } from '../../api/competition.api';
 
 export const RankScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
-  const { user, openUserProfile, fetchLeaderboard } = useApp();
+  const { user, openUserProfile, fetchLeaderboard, mySkills } = useApp();
+  // A member competes on every board they hold a skill for (Learner and/or Mentor).
+  const onBoard = (tab: UserRole) =>
+    mySkills.length > 0 ? mySkills.some((sk) => sk.role === tab) : tab === (user?.role ?? 'Learner');
 
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedRoleTab, setSelectedRoleTab] = useState<UserRole>('Learner');
@@ -395,7 +398,7 @@ export const RankScreen: React.FC = () => {
           <View style={styles.userActiveBadge}>
             <Ionicons name="checkmark-circle" size={14} color="#10B981" />
             <Text style={styles.userActiveBadgeText}>
-              {selectedRoleTab === user?.role || (selectedRoleTab === 'Learner' && !user?.role)
+              {onBoard(selectedRoleTab)
                 ? 'Active Standing'
                 : 'Viewing'}
             </Text>

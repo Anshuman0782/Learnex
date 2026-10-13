@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, PostType, UserRole } from '@prisma/client';
+import { Prisma, PostType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { timeAgo } from '../../common/utils/time-ago.js';
 import { XpService } from '../gamification/xp.service.js';
@@ -13,6 +13,7 @@ import { NotificationsService } from '../notifications/notifications.service.js'
 import { CLOUD_FOLDER, parseCloudinaryUrl } from '../media/storage/cloudinary-storage.driver.js';
 import { CreatePostDto, type PostTypeInput } from './dto/create-post.dto.js';
 import { AddCommentDto } from './dto/add-comment.dto.js';
+import { cleanSkill, isMentorIn, resolveContext, roleLabelIn, skillKey, SKILL_OWNER_SELECT } from '../../common/utils/skill.js';
 
 const POST_TYPE_TO_DB: Record<PostTypeInput, PostType> = {
   text: PostType.TEXT,
@@ -29,8 +30,6 @@ const POST_TYPE_TO_API: Record<PostType, PostTypeInput> = {
   CRITIQUE_REQUEST: 'critique_request',
 };
 
-const roleLabel = (role: UserRole | null): 'Mentor' | 'Learner' | 'Guest' =>
-  role === UserRole.MENTOR ? 'Mentor' : role === UserRole.GUEST ? 'Guest' : 'Learner';
 
 @Injectable()
 export class PostsService {
@@ -78,6 +77,8 @@ export class PostsService {
           name: true,
           role: true,
           hobby: true,
+          // Per-skill roles: the badge on a post follows the post's skill.
+          skills: { select: { skill: true, skillKey: true, role: true } },
           avatarUrl: true,
           // Does the viewer follow this author? (Reels hide "Follow" if so.)
           followers: { where: { followerId: userId }, select: { followerId: true } },
@@ -88,7 +89,7 @@ export class PostsService {
         where: { deletedAt: null, isHidden: false },
         orderBy: { createdAt: 'desc' as const },
         include: {
-          author: { select: { id: true, name: true, role: true, avatarUrl: true } },
+          author: { select: { id: true, name: true, role: true, hobby: true, skills: { select: { skill: true, skillKey: true, role: true } }, avatarUrl: true } },
           likes: { where: { userId }, select: { userId: true } },
           _count: { select: { likes: true } },
         },
@@ -123,7 +124,8 @@ export class PostsService {
       postId: c.postId,
       authorId: c.author.id,
       authorName: c.author.name,
-      authorRole: roleLabel(c.author.role),
+      // The commenter's role IN THIS POST'S SKILL (a Coding mentor is a Learner on a Music post).
+      authorRole: roleLabelIn(c.author, post.skill),
       authorAvatar: c.author.avatarUrl ?? '',
       timeAgo: timeAgo(c.createdAt),
       text: c.text,
@@ -162,8 +164,8 @@ export class PostsService {
       communityNames,
       authorId: post.author.id,
       authorName: post.author.name,
-      authorRole: roleLabel(post.author.role),
-      authorSkill: post.author.hobby ?? 'Music',
+      authorRole: roleLabelIn(post.author, post.skill ?? post.author.hobby),
+      authorSkill: post.skill ?? post.author.hobby ?? 'General',
       authorFollowed: Array.isArray(post.author.followers) && post.author.followers.length > 0,
       communityCategories: Array.from(
         new Set(post.communities.map((pc: any) => pc.community.category).filter(Boolean)),
@@ -331,15 +333,19 @@ export class PostsService {
   ): Promise<T[]> {
     const viewer = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { hobby: true },
+      select: { hobby: true, skills: { select: { skillKey: true } } },
     });
-    const hobby = viewer?.hobby?.toLowerCase();
-    if (!hobby) return items;
+    // Every skill the viewer has joined counts as "theirs".
+    const mine = new Set<string>([
+      ...(viewer?.skills ?? []).map((s) => s.skillKey),
+      ...(viewer?.hobby ? [skillKey(viewer.hobby)] : []),
+    ]);
+    if (mine.size === 0) return items;
 
     const match: T[] = [];
     const rest: T[] = [];
     for (const it of items) {
-      if ((it.authorSkill ?? '').toLowerCase() === hobby) match.push(it);
+      if (mine.has(skillKey(it.authorSkill))) match.push(it);
       else rest.push(it);
     }
     if (match.length === 0 || rest.length === 0) return items;
@@ -388,12 +394,29 @@ export class PostsService {
 
     // Keep only community ids that actually exist.
     let validIds: string[] = [];
+    let circleCategories: string[] = [];
     if (dto.communityIds && dto.communityIds.length > 0) {
       const found = await this.prisma.community.findMany({
         where: { id: { in: dto.communityIds } },
-        select: { id: true },
+        select: { id: true, category: true },
       });
       validIds = found.map((c) => c.id);
+      circleCategories = found.map((c) => c.category);
+    }
+
+    // Which of the author's skills this post belongs to: the one they picked,
+    // else the skill of a tagged circle they've joined, else their main skill.
+    const owner = await this.prisma.user.findUnique({ where: { id: userId }, select: SKILL_OWNER_SELECT });
+    let skill: string | null = null;
+    if (owner) {
+      for (const candidate of [dto.skill, ...circleCategories]) {
+        const ctx = resolveContext(owner, candidate);
+        if (ctx?.exact) {
+          skill = ctx.skill;
+          break;
+        }
+      }
+      skill ??= resolveContext(owner)?.skill ?? (cleanSkill(owner.hobby) || circleCategories[0] || null);
     }
 
     const post = await this.prisma.post.create({
@@ -413,6 +436,7 @@ export class PostsService {
         bgStyle: dto.postType === 'text' && dto.bgStyle && dto.bgStyle !== 'default' ? dto.bgStyle : null,
         isShort: dto.isShort ?? false,
         scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : null,
+        skill,
         communities: { create: validIds.map((communityId) => ({ communityId })) },
       },
       include: this.include(userId),
@@ -430,7 +454,7 @@ export class PostsService {
         : post.postType === PostType.IMAGE
         ? 'photo'
         : 'discussion';
-      await this.xp.onPostCreated(userId, post.id, kind);
+      await this.xp.onPostCreated(userId, post.id, kind, post.skill);
     }
     if (!post.isPrivate) {
       if (!scheduledFuture) this.announce('post', post.id, post.isShort);
@@ -523,10 +547,10 @@ export class PostsService {
       // The author earns like-XP once per liker per post (public posts only).
       const post = await this.prisma.post.findUnique({
         where: { id: postId },
-        select: { authorId: true, isPrivate: true },
+        select: { authorId: true, isPrivate: true, skill: true },
       });
       if (post && !post.isPrivate) {
-        await this.xp.onLikeReceived(post.authorId, userId, postId);
+        await this.xp.onLikeReceived(post.authorId, userId, postId, post.skill);
       }
       if (post && post.authorId !== userId) {
         const liker = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
@@ -560,7 +584,7 @@ export class PostsService {
       // You can't repost your own post.
       const owner = await this.prisma.post.findUnique({
         where: { id: postId },
-        select: { authorId: true },
+        select: { authorId: true, skill: true },
       });
       if (owner?.authorId === userId) {
         throw new BadRequestException('You cannot repost your own post.');
@@ -581,7 +605,7 @@ export class PostsService {
         update: { caption, communityId },
       });
       if (owner) {
-        await this.xp.onRepostReceived(owner.authorId, userId, postId);
+        await this.xp.onRepostReceived(owner.authorId, userId, postId, owner.skill);
         const who = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true } });
         await this.notifications.create({
           userId: owner.authorId,
@@ -617,17 +641,28 @@ export class PostsService {
     return this.findOne(userId, postId);
   }
 
-  async addComment(userId: string, postId: string, dto: AddCommentDto, role: UserRole | null) {
-    const post = await this.prisma.post.findFirst({
-      where: { id: postId, ...this.visibilityWhere(userId) },
-      select: { id: true, authorId: true },
-    });
-    if (!post) throw new NotFoundException('Post not found');
+  async addComment(userId: string, postId: string, dto: AddCommentDto) {
+    const [post, me] = await Promise.all([
+      this.prisma.post.findFirst({
+        where: { id: postId, ...this.visibilityWhere(userId) },
+        select: { id: true, authorId: true, skill: true, author: { select: { hobby: true } } },
+      }),
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { name: true, avatarUrl: true, ...SKILL_OWNER_SELECT },
+      }),
+    ]);
+    if (!post || !me) throw new NotFoundException('Post not found');
+    const postSkill = post.skill ?? post.author.hobby;
 
     const isMentorCritique = dto.isMentorCritique === true || dto.commentType === 'mentor';
-    // Only mentors may post a mentor critique — enforced on the server.
-    if (isMentorCritique && role !== UserRole.MENTOR) {
-      throw new ForbiddenException('Only mentors can post a critique');
+    // A critique needs a Mentor IN THIS POST'S SKILL — enforced on the server.
+    if (isMentorCritique && !isMentorIn(me, postSkill)) {
+      throw new ForbiddenException(
+        postSkill
+          ? `Only ${postSkill} mentors can critique this post. Add ${postSkill} as a Mentor skill from your profile.`
+          : 'Only mentors can post a critique',
+      );
     }
 
     const comment = await this.prisma.comment.create({
@@ -647,23 +682,20 @@ export class PostsService {
     // Mentor critiques award XP to the mentor and the post's author; regular
     // comments award the commenter. Neither pays on your own post.
     if (isMentorCritique) {
-      await this.xp.onCritiqueGiven(userId, post.authorId, comment.id);
+      await this.xp.onCritiqueGiven(userId, post.authorId, comment.id, postSkill);
     } else {
-      await this.xp.onCommentPosted(userId, post.authorId, comment.id);
+      await this.xp.onCommentPosted(userId, post.authorId, comment.id, postSkill);
     }
 
     // Live update + notification.
-    const author = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { name: true, role: true, avatarUrl: true },
-    });
+    const author = me;
     this.realtime.emitToPost(postId, 'comment:new', {
       postId,
       comment: {
         id: comment.id,
         postId,
         authorName: author?.name ?? 'Someone',
-        authorRole: roleLabel(role),
+        authorRole: roleLabelIn(me, postSkill),
         authorAvatar: author?.avatarUrl ?? '',
         timeAgo: 'Just now',
         text: comment.text,

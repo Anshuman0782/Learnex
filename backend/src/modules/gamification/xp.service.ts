@@ -3,6 +3,7 @@ import { Prisma, UserRole, XpRule, XpSource } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { startOfUtcDay, utcDay, dayDiff, seasonWindow } from './leveling.js';
 import { XP_RULE_DEFS, XP_RULE_DEF_BY_KEY, type XpTrigger } from './xp-rules.js';
+import { resolveContext, SKILL_OWNER_SELECT, type SkillContext, type Track } from '../../common/utils/skill.js';
 
 /** Streak lengths that fire a milestone trigger. */
 const STREAK_TRIGGERS: Record<number, XpTrigger> = {
@@ -69,26 +70,41 @@ export class XpService implements OnModuleInit {
     return [...this.rules.values()];
   }
 
+  // ---------- skill context ----------
+
+  /**
+   * The skill + role an activity counts toward. Activity on a post counts
+   * toward that post's skill when the member has joined it; everything else
+   * (check-ins, streaks, quests, ...) counts toward their main skill.
+   * Null for guests / accounts with no role — they earn nothing.
+   */
+  async contextFor(userId: string, skill?: string | null): Promise<SkillContext | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { deletedAt: true, ...SKILL_OWNER_SELECT },
+    });
+    if (!user || user.deletedAt) return null;
+    return resolveContext(user, skill);
+  }
+
   // ---------- awarding ----------
 
   /**
    * Fire an app event. Every active rule listening to `trigger` that applies to
    * the user's role pays out, respecting each rule's daily cap. `dedupeBase`
-   * makes it idempotent per rule (e.g. the post id). Returns total XP granted.
+   * makes it idempotent per rule (e.g. the post id). `skill` is the skill the
+   * activity happened in — the member's role IN THAT SKILL decides which rules
+   * apply. Returns total XP granted.
    */
-  async trigger(userId: string, trigger: XpTrigger, dedupeBase?: string): Promise<number> {
+  async trigger(userId: string, trigger: XpTrigger, dedupeBase?: string, skill?: string | null): Promise<number> {
     const rules = (await this.getRules()).filter(
       (r) => r.isActive && r.trigger === trigger && r.xp > 0,
     );
     if (rules.length === 0) return 0;
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { role: true, deletedAt: true },
-    });
-    if (!user || user.deletedAt) return 0;
-    if (user.role === UserRole.GUEST) return 0; // guests never earn XP
-    const role = user.role === UserRole.MENTOR ? 'Mentor' : user.role === UserRole.LEARNER ? 'Learner' : null;
+    const ctx = await this.contextFor(userId, skill);
+    if (!ctx) return 0; // guests never earn XP
+    const role = ctx.role;
 
     let total = 0;
     for (const rule of rules) {
@@ -106,6 +122,7 @@ export class XpService implements OnModuleInit {
         rule.xp,
         dedupeBase ? `${rule.key}:${dedupeBase}` : undefined,
         rule.key,
+        ctx,
       );
     }
     return total;
@@ -121,11 +138,16 @@ export class XpService implements OnModuleInit {
     amount: number,
     dedupeKey?: string,
     ruleKey?: string,
+    /** A resolved context, or the skill name the XP was earned in. */
+    skill?: SkillContext | string | null,
   ): Promise<number> {
     // Every XP grant (rules, quests, events) passes through here.
-    if (await this.isGuest(userId)) return 0;
+    const ctx = skill && typeof skill === 'object' ? skill : await this.contextFor(userId, skill);
+    if (!ctx) return 0; // guests never earn XP
     try {
-      await this.prisma.xpEvent.create({ data: { userId, source, amount, dedupeKey, ruleKey } });
+      await this.prisma.xpEvent.create({
+        data: { userId, source, amount, dedupeKey, ruleKey, skill: ctx.key, role: ctx.role },
+      });
       return amount;
     } catch (e) {
       // Unique violation on dedupeKey → already awarded; treat as no-op.
@@ -145,11 +167,14 @@ export class XpService implements OnModuleInit {
     return agg._sum.amount ?? 0;
   }
 
-  /** XP earned in the current season (calendar month) — drives ranking. */
-  async seasonXp(userId: string): Promise<number> {
+  /**
+   * XP earned in the current season (calendar month) — drives ranking.
+   * Pass a board to count only the XP earned in that role.
+   */
+  async seasonXp(userId: string, board?: Track): Promise<number> {
     const { startsAt, endsAt } = seasonWindow();
     const agg = await this.prisma.xpEvent.aggregate({
-      where: { userId, createdAt: { gte: startsAt, lt: endsAt } },
+      where: { userId, createdAt: { gte: startsAt, lt: endsAt }, ...(board ? { role: board } : {}) },
       _sum: { amount: true },
     });
     return agg._sum.amount ?? 0;
@@ -219,9 +244,9 @@ export class XpService implements OnModuleInit {
   // ---------- activity hooks (called by feature modules) ----------
 
   /** A user published a public post of the given kind. */
-  async onPostCreated(userId: string, postId: string, kind: PostKind): Promise<void> {
-    await this.trigger(userId, 'post.published', postId);
-    await this.trigger(userId, `${kind}.published` as XpTrigger, postId);
+  async onPostCreated(userId: string, postId: string, kind: PostKind, skill?: string | null): Promise<void> {
+    await this.trigger(userId, 'post.published', postId, skill);
+    await this.trigger(userId, `${kind}.published` as XpTrigger, postId, skill);
     await this.recordActivity(userId);
     await this.awardBadge(userId, 'first_post');
   }
@@ -243,33 +268,33 @@ export class XpService implements OnModuleInit {
    * A mentor left a critique; credit both the mentor and the post's author.
    * Critiquing your own post earns nothing.
    */
-  async onCritiqueGiven(mentorId: string, postAuthorId: string, commentId: string): Promise<void> {
+  async onCritiqueGiven(mentorId: string, postAuthorId: string, commentId: string, skill?: string | null): Promise<void> {
     if (mentorId === postAuthorId) return;
 
-    await this.trigger(mentorId, 'critique.given', commentId);
+    await this.trigger(mentorId, 'critique.given', commentId, skill);
     await this.recordActivity(mentorId);
     await this.awardBadge(mentorId, 'first_critique_given');
 
-    await this.trigger(postAuthorId, 'critique.received', commentId);
+    await this.trigger(postAuthorId, 'critique.received', commentId, skill);
     await this.awardBadge(postAuthorId, 'first_critique_received');
   }
 
   /** A regular comment was posted. Commenting on your own post earns nothing. */
-  async onCommentPosted(userId: string, postAuthorId: string, commentId: string): Promise<void> {
+  async onCommentPosted(userId: string, postAuthorId: string, commentId: string, skill?: string | null): Promise<void> {
     if (userId === postAuthorId) return;
-    await this.trigger(userId, 'comment.posted', commentId);
+    await this.trigger(userId, 'comment.posted', commentId, skill);
   }
 
   /** Someone liked a post: pays the author once per liker per post. */
-  async onLikeReceived(postAuthorId: string, likerId: string, postId: string): Promise<void> {
+  async onLikeReceived(postAuthorId: string, likerId: string, postId: string, skill?: string | null): Promise<void> {
     if (postAuthorId === likerId) return;
-    await this.trigger(postAuthorId, 'like.received', `${postId}:${likerId}`);
+    await this.trigger(postAuthorId, 'like.received', `${postId}:${likerId}`, skill);
   }
 
   /** Someone reposted a post: pays the author once per reposter per post. */
-  async onRepostReceived(postAuthorId: string, reposterId: string, postId: string): Promise<void> {
+  async onRepostReceived(postAuthorId: string, reposterId: string, postId: string, skill?: string | null): Promise<void> {
     if (postAuthorId === reposterId) return;
-    await this.trigger(postAuthorId, 'repost.received', `${postId}:${reposterId}`);
+    await this.trigger(postAuthorId, 'repost.received', `${postId}:${reposterId}`, skill);
   }
 
   /** Someone followed a user: pays once per follower (unfollow/refollow can't farm). */
@@ -279,7 +304,7 @@ export class XpService implements OnModuleInit {
   }
 
   /** A circle event was completed (in addition to the event's own XP reward). */
-  async onEventCompleted(userId: string, eventId: string): Promise<void> {
-    await this.trigger(userId, 'event.completed', eventId);
+  async onEventCompleted(userId: string, eventId: string, skill?: string | null): Promise<void> {
+    await this.trigger(userId, 'event.completed', eventId, skill);
   }
 }

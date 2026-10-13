@@ -120,7 +120,7 @@ export class GamificationService {
     // Season (monthly) standing on the user's own leaderboard (Learner / Mentor).
     const season = await this.seasons.ensureCurrentSeason();
     const [seasonXp, standings, lastStanding] = await Promise.all([
-      this.xp.seasonXp(userId),
+      this.xp.seasonXp(userId, role ? roleLabelOf(role) : undefined),
       role ? this.seasons.standings(season, { role }) : Promise.resolve([]),
       this.prisma.seasonStanding.findFirst({
         where: { userId },

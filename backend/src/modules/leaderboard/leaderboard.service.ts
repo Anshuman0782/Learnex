@@ -3,6 +3,7 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { SeasonService } from '../seasons/season.service.js';
 import { levelInfo } from '../gamification/leveling.js';
+import { cleanSkill } from '../../common/utils/skill.js';
 
 interface RankedRow {
   rank: number;
@@ -70,14 +71,14 @@ export class LeaderboardService {
    * first — so the ranking filter only offers categories that actually exist.
    */
   async categories(): Promise<string[]> {
-    const rows = await this.prisma.user.groupBy({
-      by: ['hobby'],
-      where: { deletedAt: null, role: { not: null }, hobby: { not: null } },
+    const rows = await this.prisma.userSkill.groupBy({
+      by: ['skill'],
+      where: { user: { deletedAt: null } },
       _count: { _all: true },
     });
     const merged = new Map<string, { label: string; count: number }>();
     for (const r of rows) {
-      const label = (r.hobby ?? '').trim();
+      const label = cleanSkill(r.skill);
       if (!label) continue;
       const key = label.toLowerCase(); // "music" and "Music" are one category
       const prev = merged.get(key);
@@ -113,7 +114,7 @@ export class LeaderboardService {
     const pageIds = page.map((r) => r.userId);
 
     // Batch enrichment.
-    const [streaks, totalSums, critSums] = await Promise.all([
+    const [streaks, totalSums, critSums, skillRows] = await Promise.all([
       this.prisma.streak.findMany({ where: { userId: { in: pageIds } } }),
       this.prisma.xpEvent.groupBy({
         by: ['userId'],
@@ -125,13 +126,21 @@ export class LeaderboardService {
         where: { authorId: { in: pageIds }, isMentorCritique: true, deletedAt: null },
         _count: { _all: true },
       }),
+      // The skills each member holds IN THIS BOARD'S ROLE.
+      this.prisma.userSkill.findMany({
+        where: { userId: { in: pageIds }, role },
+        select: { userId: true, skill: true },
+        orderBy: { createdAt: 'asc' },
+      }),
     ]);
+    const skillsOf = new Map<string, string[]>();
+    for (const s of skillRows) skillsOf.set(s.userId, [...(skillsOf.get(s.userId) ?? []), s.skill]);
     const streakMap = new Map(streaks.map((s) => [s.userId, s.current]));
     const totalMap = new Map(totalSums.map((s) => [s.userId, s._sum.amount ?? 0]));
     const critMap = new Map(critSums.map((c) => [c.authorId, c._count._all]));
 
     return page.map((r) => {
-      const isMentor = r.role === UserRole.MENTOR;
+      const isMentor = role === UserRole.MENTOR; // the board's role, not the account's
       const streak = streakMap.get(r.userId) ?? 0;
       const crit = critMap.get(r.userId) ?? 0;
       return {
@@ -142,7 +151,10 @@ export class LeaderboardService {
         rank: r.rank,
         xpPoints: r.seasonXp,
         badge: levelInfo(totalMap.get(r.userId) ?? 0).title,
-        specialtyOrHobby: r.hobby ?? 'General',
+        specialtyOrHobby:
+          opts.category && opts.category !== 'All'
+            ? cleanSkill(opts.category)
+            : (skillsOf.get(r.userId) ?? []).slice(0, 2).join(', ') || r.hobby || 'General',
         keyMetricLabel: isMentor ? 'Critiques Delivered' : 'Consistency',
         keyMetricValue: isMentor ? `${crit} critiques` : `${streak}d streak`,
         isCurrentUser: r.userId === currentUserId,

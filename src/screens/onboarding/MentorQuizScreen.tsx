@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { AuthStackParamList } from '../../navigation/types';
@@ -27,6 +27,10 @@ type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'MentorQuiz'
 export const MentorQuizScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NavigationProp>();
+  const route = useRoute<RouteProp<AuthStackParamList, 'MentorQuiz'>>();
+  // Set when the test is for one specific skill (added from the profile).
+  const skill = route.params?.skill;
+  const addingSkill = !!route.params?.addSkill;
   const { enrollAsLearner, applyMentorSession, showDialog } = useApp();
 
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
@@ -50,7 +54,7 @@ export const MentorQuizScreen: React.FC = () => {
     setLoadingQuiz(true);
     setQuizError(null);
     try {
-      const data = await getMentorQuizRequest();
+      const data = await getMentorQuizRequest(skill);
       setQuestions(data.questions);
       setPassMark(data.passMark);
       setCurrentIndex(0);
@@ -64,7 +68,7 @@ export const MentorQuizScreen: React.FC = () => {
     } finally {
       setLoadingQuiz(false);
     }
-  }, []);
+  }, [skill]);
 
   useEffect(() => {
     loadQuiz();
@@ -81,7 +85,7 @@ export const MentorQuizScreen: React.FC = () => {
         questionId: q.id,
         selectedIndex: selectedAnswers[idx],
       }));
-      const res = await submitMentorQuizRequest(answers);
+      const res = await submitMentorQuizRequest(answers, skill);
       // On a pass the backend granted Mentor + returned a fresh session.
       if (res.passed && res.session) {
         await applyMentorSession(res.session);
@@ -132,7 +136,7 @@ export const MentorQuizScreen: React.FC = () => {
   const handleContinueAsLearner = async () => {
     setEntering(true);
     try {
-      await enrollAsLearner();
+      await enrollAsLearner(skill);
       enterApp();
     } catch (err: any) {
       showDialog({
@@ -243,15 +247,15 @@ export const MentorQuizScreen: React.FC = () => {
 
             <Text style={styles.resultDescription}>
               {hasPassed
-                ? `Outstanding! You met the ${result.passMark}/${result.total} qualification criteria and unlocked full Mentor privileges including video critiques and community guidance.`
-                : `You scored under ${result.passMark}/${result.total} required for Mentor qualification. You can retake the test, or join as a Learner to practice, receive mentor feedback, and level up.`}
+                ? `Outstanding! You met the ${result.passMark}/${result.total} qualification criteria and unlocked Mentor privileges${skill ? ` in ${skill}` : ''}, including critiques and community guidance.`
+                : `You scored under ${result.passMark}/${result.total} required for Mentor qualification. You can retake the test, or join${skill ? ` ${skill}` : ''} as a Learner to practice, receive mentor feedback, and level up.`}
             </Text>
 
             {hasPassed && (
               <View style={styles.assignedRoleChip}>
                 <Ionicons name="ribbon" size={18} color="#7C3AED" />
                 <Text style={styles.assignedRoleText}>
-                  Active Role: <Text style={{ fontWeight: 'bold' }}>Mentor</Text>
+                  {skill ? `${skill}: ` : 'Active Role: '}<Text style={{ fontWeight: 'bold' }}>Mentor</Text>
                 </Text>
               </View>
             )}

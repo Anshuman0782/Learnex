@@ -8,6 +8,8 @@ export interface CreatePostBody {
   content: string;
   postType: 'text' | 'video' | 'audio' | 'image' | 'critique_request';
   communityIds?: string[];
+  /** Which of the author's skills this post belongs to (default: main skill). */
+  skill?: string;
   title?: string;
   tags?: string[];
   tag?: string;

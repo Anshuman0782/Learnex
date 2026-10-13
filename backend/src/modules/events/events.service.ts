@@ -9,12 +9,13 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { CommunityEvent, EventParticipation, PostType, Prisma, UserRole, XpSource } from '@prisma/client';
+import { CommunityEvent, EventParticipation, PostType, Prisma, XpSource } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { XpService } from '../gamification/xp.service.js';
 import { RealtimeGateway } from '../realtime/realtime.gateway.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { utcDay } from '../gamification/leveling.js';
+import { resolveContext, SKILL_OWNER_SELECT } from '../../common/utils/skill.js';
 import { CreateEventDto, TrackInputDto } from './dto/create-event.dto.js';
 import {
   ContentKind,
@@ -64,8 +65,6 @@ export const EVENT_RULES: string[] = [
   'The admin who created an event can play, but never earns its XP.',
 ];
 
-const roleLabel = (r: UserRole | null): Track | null =>
-  r === UserRole.MENTOR ? 'Mentor' : r === UserRole.LEARNER ? 'Learner' : null;
 
 const LOOK = {
   Learner: { gradient: ['#7C3AED', '#DB2777'] as [string, string], icon: 'rocket' },
@@ -333,7 +332,13 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
    * Pay a participant whatever they've earned but not received yet. Safe under
    * concurrency: only the request that moves xpAwarded from its old value pays.
    */
-  private async payDelta(e: CommunityEvent, p: EventParticipation, pct: number): Promise<number> {
+  private async payDelta(
+    e: CommunityEvent & { community?: { category?: string } },
+    p: EventParticipation,
+    pct: number,
+  ): Promise<number> {
+    // Event XP counts toward the circle's skill.
+    const skill = e.community?.category;
     const isCreator = e.createdById === p.userId;
     const target = isCreator ? 0 : this.xpFor(e, p.role as Track, pct);
     const completedNow = pct >= 100 && !p.completedAt;
@@ -348,10 +353,10 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     });
     if (res.count !== 1) return 0;
     if (delta > 0) {
-      await this.xp.award(p.userId, XpSource.EVENT, delta, `event:${e.id}:${p.userId}:${target}`);
+      await this.xp.award(p.userId, XpSource.EVENT, delta, `event:${e.id}:${p.userId}:${target}`, undefined, skill);
     }
     if (completedNow && !isCreator) {
-      await this.xp.onEventCompleted(p.userId, e.id);
+      await this.xp.onEventCompleted(p.userId, e.id, skill);
       await this.xp.recordActivity(p.userId);
     }
     return Math.max(0, delta);
@@ -372,7 +377,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
           settledAt: null,
           OR: [{ votingEndsAt: { lte: now } }, { endsAt: { lte: now } }],
         },
-        include: { participations: true, community: { select: { name: true } } },
+        include: { participations: true, community: { select: { name: true, category: true } } },
       });
       for (const e of due) {
         const voters = e.participations.filter((p) => p.userId !== e.createdById);
@@ -509,7 +514,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
   private async load(where: Prisma.CommunityEventWhereInput) {
     return this.prisma.communityEvent.findMany({
       where,
-      include: { participations: true, community: { select: { name: true } } },
+      include: { participations: true, community: { select: { name: true, category: true } } },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -524,8 +529,10 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
 
   async list(userId: string, communityId?: string) {
     await this.maybeSweep();
-    const viewer = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
-    const myRole = roleLabel(viewer?.role ?? null);
+    const viewer = await this.prisma.user.findUnique({ where: { id: userId }, select: SKILL_OWNER_SELECT });
+    // The viewer's track in each event = their role in that circle's skill.
+    const trackIn = (category: string): Track | null =>
+      viewer ? resolveContext(viewer, category)?.role ?? null : null;
     const events = await this.load({
       ...(communityId ? { communityId } : {}),
       cancelledAt: null,
@@ -534,7 +541,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     });
     const names = await this.creatorNames(events.map((e) => e.createdById));
     const out = await Promise.all(
-      events.map((e) => this.summarize(e, userId, myRole, names.get(e.createdById ?? '') ?? 'LERNEX Admin')),
+      events.map((e) => this.summarize(e, userId, trackIn(e.community.category), names.get(e.createdById ?? '') ?? 'LERNEX Admin')),
     );
     return out.filter((e) => e.phase === 'voting' || e.phase === 'live');
   }
@@ -544,9 +551,10 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     await this.maybeSweep();
     const [e] = await this.load({ id: eventId });
     if (!e) throw new NotFoundException('Event not found');
-    const viewer = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    const viewer = await this.prisma.user.findUnique({ where: { id: userId }, select: SKILL_OWNER_SELECT });
     const names = await this.creatorNames([e.createdById]);
-    const summary = await this.summarize(e, userId, roleLabel(viewer?.role ?? null), names.get(e.createdById ?? '') ?? 'LERNEX Admin');
+    const myTrack = viewer ? resolveContext(viewer, e.community.category)?.role ?? null : null;
+    const summary = await this.summarize(e, userId, myTrack, names.get(e.createdById ?? '') ?? 'LERNEX Admin');
 
     const users = await this.prisma.user.findMany({
       where: { id: { in: e.participations.map((p) => p.userId) } },
@@ -716,7 +724,7 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     if (phase !== 'voting') throw new BadRequestException('Voting has closed — only members who voted can play.');
 
     const [user, member] = await Promise.all([
-      this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } }),
+      this.prisma.user.findUnique({ where: { id: userId }, select: SKILL_OWNER_SELECT }),
       this.prisma.communityMembership.findUnique({
         where: { userId_communityId: { userId, communityId: e.communityId } },
         select: { id: true },
@@ -726,7 +734,8 @@ export class EventsService implements OnModuleInit, OnModuleDestroy {
     if (user?.role === 'GUEST') {
       throw new ForbiddenException('Challenges award XP, so they’re for Learners and Mentors. Switch from Guest in your profile to join.');
     }
-    const role = roleLabel(user?.role ?? null);
+    // Learner or Mentor track = the member's role in this circle's skill.
+    const role = user ? resolveContext(user, e.community.category)?.role ?? null : null;
     if (!role || !this.tracksOf(e)[role]) {
       throw new ForbiddenException(`This event has no challenge for ${role ?? 'your role'}s.`);
     }

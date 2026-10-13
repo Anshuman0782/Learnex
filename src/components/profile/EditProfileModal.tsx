@@ -33,7 +33,10 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   visible,
   onClose,
 }) => {
-  const { user, updateUser, updateAvatar } = useApp();
+  const { user, updateUser, updateAvatar, mySkills, setPrimarySkill } = useApp();
+  // Members choose their main skill from the skills they've joined; guests
+  // (no skills yet) keep a free-text focus.
+  const isMember = mySkills.length > 0;
   const insets = useSafeAreaInsets();
 
   const [name, setName] = useState('');
@@ -84,6 +87,10 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     });
     return out.slice(0, 14);
   })();
+  const trackOptions = isMember
+    ? mySkills.map((s) => s.skill)
+    : [currentHobby, ...suggestions].filter(Boolean);
+  const roleOfTrack = (t: string) => mySkills.find((s) => s.skill.toLowerCase() === t.toLowerCase())?.role;
   const finalHobby = customMode ? customHobby.trim() : hobby;
 
   const handlePickAvatar = async (mode: 'camera' | 'library') => {
@@ -116,11 +123,17 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     setIsSaving(true);
     try {
       // Saved on the server. Email / phone change through the verified flow.
-      await updateUser({
-        name: name.trim(),
-        bio: bio.trim(),
-        hobby: finalHobby,
-      });
+      if (isMember) {
+        // Switching main skill also switches the account's role to that skill's role.
+        if (finalHobby.toLowerCase() !== currentHobby.toLowerCase()) await setPrimarySkill(finalHobby);
+        await updateUser({ name: name.trim(), bio: bio.trim() });
+      } else {
+        await updateUser({
+          name: name.trim(),
+          bio: bio.trim(),
+          hobby: finalHobby,
+        });
+      }
       onClose();
       Alert.alert('Profile Updated! ✨', 'Your changes have been saved.');
     } catch (err: any) {
@@ -235,14 +248,14 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
 
               {/* Primary Focus Track: current + suggestions + custom */}
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Primary Focus Track</Text>
+                <Text style={styles.fieldLabel}>{isMember ? 'Main Skill' : 'Primary Focus Track'}</Text>
                 {!!currentHobby && (
                   <Text style={styles.currentTrack}>
                     Current: <Text style={styles.currentTrackValue}>{currentHobby}</Text>
                   </Text>
                 )}
                 <View style={styles.tracksRow}>
-                  {[currentHobby, ...suggestions].filter(Boolean).map((track) => {
+                  {trackOptions.map((track) => {
                     const isSelected = !customMode && hobby.toLowerCase() === track.toLowerCase();
                     return (
                       <TouchableOpacity
@@ -255,10 +268,13 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                         style={[styles.trackChip, isSelected && styles.trackChipActive]}
                       >
                         {track === currentHobby && <Ionicons name="star" size={11} color={isSelected ? '#FFFFFF' : '#F59E0B'} />}
-                        <Text style={[styles.trackChipText, isSelected && styles.trackChipTextActive]}>{track}</Text>
+                        <Text style={[styles.trackChipText, isSelected && styles.trackChipTextActive]}>
+                          {track}{roleOfTrack(track) ? ` · ${roleOfTrack(track)}` : ''}
+                        </Text>
                       </TouchableOpacity>
                     );
                   })}
+                  {!isMember && (
                   <TouchableOpacity
                     activeOpacity={0.8}
                     onPress={() => setCustomMode(true)}
@@ -267,6 +283,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                     <Ionicons name="add" size={13} color={customMode ? '#FFFFFF' : '#4F46E5'} />
                     <Text style={[styles.trackChipText, customMode && styles.trackChipTextActive]}>Custom</Text>
                   </TouchableOpacity>
+                  )}
                 </View>
                 {customMode && (
                   <View style={[styles.inputWrapper, { marginTop: 10 }]}>
@@ -282,7 +299,11 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                     />
                   </View>
                 )}
-                <Text style={styles.trackHint}>Your focus decides which circles we recommend.</Text>
+                <Text style={styles.trackHint}>
+                  {isMember
+                    ? 'Your main skill is shown first on your profile. Add more from “My skills” on your profile.'
+                    : 'Your focus decides which circles we recommend.'}
+                </Text>
               </View>
 
               {(['email', 'phone'] as const).map((f) => (

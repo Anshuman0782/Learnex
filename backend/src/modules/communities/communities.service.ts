@@ -7,6 +7,7 @@ import { Community, CommunityRole, Prisma, UserRole } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { RealtimeGateway } from '../realtime/realtime.gateway.js';
+import { roleLabelIn } from '../../common/utils/skill.js';
 
 /** A real community member — an actual user who joined. No fabricated fields. */
 export interface CommunityMemberView {
@@ -101,7 +102,7 @@ export class CommunitiesService {
         select: {
           communityId: true,
           role: true,
-          user: { select: { id: true, name: true, role: true } },
+          user: { select: { id: true, name: true, role: true, hobby: true, skills: { select: { skill: true, skillKey: true, role: true } }, } },
         },
         orderBy: { joinedAt: 'asc' },
       }),
@@ -109,6 +110,8 @@ export class CommunitiesService {
       this.adminIds(userId),
     ]);
 
+    // A member counts as a Mentor of a circle only if they mentor ITS skill.
+    const categoryOf = new Map(communities.map((c) => [c.id, c.category]));
     // Group real members by community.
     const byCommunity = new Map<string, CommunityMemberView[]>();
     for (const m of memberships) {
@@ -116,7 +119,7 @@ export class CommunitiesService {
       list.push({
         id: m.user.id,
         name: m.user.name,
-        role: m.user.role === UserRole.MENTOR ? 'Mentor' : m.user.role === UserRole.GUEST ? 'Guest' : 'Learner',
+        role: roleLabelIn(m.user, categoryOf.get(m.communityId)),
         isAdmin: m.role === CommunityRole.ADMIN,
       });
       byCommunity.set(m.communityId, list);

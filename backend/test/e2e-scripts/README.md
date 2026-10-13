@@ -19,6 +19,7 @@ node test/e2e-scripts/guest-e2e.mjs
 |---|---|
 | `guest-e2e.mjs` | Guest role: can post/comment, no XP/streak/badges, not ranked, no challenges, upgrade |
 | `live-e2e.mjs` | Live feed/circle updates, follow + repost flags, circle-admin events |
+| `skills-e2e.mjs` | Multi-skill: a role per skill, per-skill XP + boards, critique rights, main skill, guests |
 | `session-e2e.mjs` | Login never drops: refresh grace window, 1-year sessions, logout |
 
 Auth routes are rate-limited (5/min) by design — if a script reports 429s,

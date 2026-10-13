@@ -9,6 +9,7 @@ import { VerifyEmailScreen } from '../screens/auth/VerifyEmailScreen';
 import { CommunityRecommendationScreen } from '../screens/onboarding/CommunityRecommendationScreen';
 import { RoleSelectionScreen } from '../screens/onboarding/RoleSelectionScreen';
 import { MentorQuizScreen } from '../screens/onboarding/MentorQuizScreen';
+import { AddSkillScreen } from '../screens/onboarding/AddSkillScreen';
 import { MainTabNavigator } from './MainTabNavigator';
 
 const Stack = createNativeStackNavigator<AuthStackParamList>();
@@ -33,6 +34,7 @@ export const AuthNavigator: React.FC = () => {
       />
       <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
       <Stack.Screen name="MentorQuiz" component={MentorQuizScreen} />
+      <Stack.Screen name="AddSkill" component={AddSkillScreen} />
       <Stack.Screen name="Main" component={MainTabNavigator} />
     </Stack.Navigator>
   );

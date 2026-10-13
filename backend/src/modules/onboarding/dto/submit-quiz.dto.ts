@@ -4,9 +4,12 @@ import {
   ArrayMinSize,
   IsArray,
   IsInt,
+  IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 
@@ -29,4 +32,20 @@ export class SubmitQuizDto {
   @ValidateNested({ each: true })
   @Type(() => QuizAnswerDto)
   answers!: QuizAnswerDto[];
+
+  /** The skill being tested for (defaults to the member's main skill). */
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(40)
+  skill?: string;
+}
+
+/** Names one skill — joining it as a Learner, or making it the main skill. */
+export class SkillDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(40)
+  skill?: string;
 }

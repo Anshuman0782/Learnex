@@ -62,8 +62,8 @@ export class AdminBroadcastService implements OnModuleInit, OnModuleDestroy {
   private async recipients(a: BroadcastAudienceDto): Promise<string[]> {
     const base: Prisma.UserWhereInput = { deletedAt: null };
     let where: Prisma.UserWhereInput = base;
-    if (a.audience === 'LEARNERS') where = { ...base, role: UserRole.LEARNER };
-    else if (a.audience === 'MENTORS') where = { ...base, role: UserRole.MENTOR };
+    if (a.audience === 'LEARNERS') where = { ...base, OR: [{ role: UserRole.LEARNER }, { skills: { some: { role: UserRole.LEARNER } } }] };
+    else if (a.audience === 'MENTORS') where = { ...base, OR: [{ role: UserRole.MENTOR }, { skills: { some: { role: UserRole.MENTOR } } }] };
     else if (a.audience === 'CIRCLE') {
       if (!a.communityId) throw new BadRequestException('Choose a circle');
       where = { ...base, memberships: { some: { communityId: a.communityId } } };

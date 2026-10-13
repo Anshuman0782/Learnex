@@ -10,6 +10,8 @@ export interface PublicProfile {
   avatarUrl: string;
   role: 'Learner' | 'Mentor' | 'Guest' | null;
   hobby: string | null;
+  /** Every skill they've joined, with their role in each. */
+  skills: { skill: string; role: 'Learner' | 'Mentor' }[];
   bio: string | null;
   handle: string | null;
   followersCount: number;
@@ -163,7 +165,10 @@ export class FollowService {
   async getProfile(viewerId: string, targetId: string): Promise<PublicProfile> {
     const user = await this.prisma.user.findFirst({
       where: { id: targetId, deletedAt: null },
-      select: { id: true, name: true, avatarUrl: true, role: true, hobby: true, bio: true, handle: true },
+      select: {
+        id: true, name: true, avatarUrl: true, role: true, hobby: true, bio: true, handle: true,
+        skills: { select: { skill: true, role: true }, orderBy: { createdAt: 'asc' } },
+      },
     });
     if (!user) throw new NotFoundException('User not found');
 
@@ -184,6 +189,10 @@ export class FollowService {
       avatarUrl: user.avatarUrl ?? '',
       role: user.role === UserRole.MENTOR ? 'Mentor' : user.role === UserRole.LEARNER ? 'Learner' : user.role === UserRole.GUEST ? 'Guest' : null,
       hobby: user.hobby,
+      skills: user.skills.map((s) => ({
+        skill: s.skill,
+        role: s.role === UserRole.MENTOR ? ('Mentor' as const) : ('Learner' as const),
+      })),
       bio: user.bio,
       handle: user.handle,
       followersCount,

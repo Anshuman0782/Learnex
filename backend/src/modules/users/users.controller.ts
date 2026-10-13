@@ -1,4 +1,6 @@
-import { Body, Controller, Delete, HttpCode, HttpStatus, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, HttpCode, HttpStatus, Patch, Post } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
+import { cleanSkill, skillKey } from '../../common/utils/skill.js';
 import { IsString, Matches, MaxLength } from 'class-validator';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { UsersService } from './users.service.js';
@@ -27,12 +29,31 @@ export class UsersController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: UpdateProfileDto,
   ): Promise<SafeUser> {
+    // Members pick their main skill from the skills they've joined (each has
+    // its own role); guests have no skills yet, so theirs is free text.
+    let hobby = dto.hobby === undefined ? undefined : cleanSkill(dto.hobby);
+    let role: UserRole | undefined;
+    if (hobby) {
+      const me = await this.prisma.user.findUnique({
+        where: { id: user.userId },
+        select: { skills: { select: { skill: true, skillKey: true, role: true } } },
+      });
+      if (me && me.skills.length > 0) {
+        const mine = me.skills.find((s) => s.skillKey === skillKey(hobby));
+        if (!mine) {
+          throw new BadRequestException(`Add ${hobby} from “Add skill” in your profile first.`);
+        }
+        hobby = mine.skill;
+        role = mine.role;
+      }
+    }
     const updated = await this.users.update(user.userId, {
       avatarUrl: dto.avatarUrl,
       name: dto.name,
       bio: dto.bio,
       handle: dto.handle,
-      hobby: dto.hobby?.trim(),
+      hobby,
+      ...(role ? { role } : {}),
     });
     return toSafeUser(updated);
   }

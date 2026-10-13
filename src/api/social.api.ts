@@ -7,6 +7,8 @@ export interface PublicProfile {
   avatarUrl: string;
   role: 'Learner' | 'Mentor' | 'Guest' | null;
   hobby: string | null;
+  /** Every skill they've joined, with their role in each. */
+  skills?: { skill: string; role: 'Learner' | 'Mentor' }[];
   bio: string | null;
   handle: string | null;
   followersCount: number;

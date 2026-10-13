@@ -44,6 +44,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
   const topInset = useSafeAreaInsets().top;
   const {
     selectedRole,
+    roleInSkill,
     posts,
     reels,
     addCommentToPost,
@@ -165,7 +166,9 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
 
   if (!post) return null;
 
-  const isMentor = selectedRole === 'Mentor';
+  // Mentor critiques need a Mentor IN THIS POST'S SKILL (a Coding mentor is a
+  // regular member on a Music post).
+  const isMentor = roleInSkill(post.authorSkill) === 'Mentor';
   const isSaved = !!post.isSaved;
 
   const mentorCritiques = post.comments?.filter((c) => c.isMentorCritique || c.commentType === 'mentor') || [];
@@ -189,7 +192,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
     if (isSubmittingMentorCritique && !isMentor) {
       Alert.alert(
         'Mentor Feature',
-        'Only verified Mentors can submit critiques and video breakdowns.'
+        `Only ${post.authorSkill || 'verified'} Mentors can submit critiques on this post.`
       );
       return;
     }

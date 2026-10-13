@@ -363,11 +363,21 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({
                 <Text style={styles.aboutRowLabel}>Bio</Text>
                 <Text style={styles.aboutRowValue}>{profile?.bio || user.bio || 'No bio yet.'}</Text>
                 <View style={styles.aboutMetaRow}>
-                  {!!(profile?.hobby || user.hobby) && (
-                    <View style={styles.aboutChip}>
-                      <Ionicons name="sparkles" size={12} color="#4F46E5" />
-                      <Text style={styles.aboutChipText}>{profile?.hobby || user.hobby}</Text>
-                    </View>
+                  {(profile?.skills?.length ?? 0) > 0 ? (
+                    // Each skill with the role they hold in it.
+                    profile!.skills!.map((s) => (
+                      <View key={s.skill} style={styles.aboutChip}>
+                        <Ionicons name={s.role === 'Mentor' ? 'ribbon' : 'school'} size={12} color="#4F46E5" />
+                        <Text style={styles.aboutChipText}>{s.skill} · {s.role}</Text>
+                      </View>
+                    ))
+                  ) : (
+                    !!(profile?.hobby || user.hobby) && (
+                      <View style={styles.aboutChip}>
+                        <Ionicons name="sparkles" size={12} color="#4F46E5" />
+                        <Text style={styles.aboutChipText}>{profile?.hobby || user.hobby}</Text>
+                      </View>
+                    )
                   )}
                   <View style={styles.aboutChip}>
                     <Ionicons name={isMentor ? 'star' : 'school'} size={12} color="#4F46E5" />

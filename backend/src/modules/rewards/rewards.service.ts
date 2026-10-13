@@ -59,28 +59,44 @@ export class RewardsService {
     return !!board && (targetRole === 'Both' || targetRole === board);
   }
 
-  /** The most recent finished season and the user's locked standing in it. */
+  /**
+   * The most recent finished season and the user's locked standings in it — one
+   * per board they were ranked on (a member can be on both Learner and Mentor).
+   */
   private async lastFinished(userId: string) {
     const season = await this.prisma.season.findFirst({
       where: { finalizedAt: { not: null } },
       orderBy: { number: 'desc' },
     });
-    if (!season) return { season: null, standing: null };
-    const standing = await this.prisma.seasonStanding.findUnique({
-      where: { seasonId_userId: { seasonId: season.id, userId } },
+    if (!season) return { season: null, standings: [] };
+    const standings = await this.prisma.seasonStanding.findMany({
+      where: { seasonId: season.id, userId },
     });
-    return { season, standing };
+    return { season, standings };
+  }
+
+  /** Did any of the user's final standings earn this reward? */
+  private earnedBy(
+    reward: { targetRole: string; minRank: number },
+    standings: { role: string; rank: number }[],
+  ): boolean {
+    return standings.some((s) => this.appliesTo(reward.targetRole, s.role) && s.rank <= reward.minRank);
   }
 
   async list(userId: string, role: UserRole | null): Promise<RewardView[]> {
-    const board = this.boardOf(role);
+    const ranked = !!this.boardOf(role); // guests / new accounts aren't on any board
     const current = await this.seasons.ensureCurrentSeason();
-    const [rewards, standings, last] = await Promise.all([
+    const [rewards, learners, mentors, last] = await Promise.all([
       this.prisma.seasonReward.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' } }),
-      role ? this.seasons.standings(current, { role }) : Promise.resolve([]),
+      ranked ? this.seasons.standings(current, { role: UserRole.LEARNER }) : Promise.resolve([]),
+      ranked ? this.seasons.standings(current, { role: UserRole.MENTOR }) : Promise.resolve([]),
       this.lastFinished(userId),
     ]);
-    const myRank = standings.find((s) => s.userId === userId)?.rank ?? 0;
+    // Where the user stands right now on each board they earn XP on.
+    const live = [
+      { role: 'Learner', rank: learners.find((s) => s.userId === userId)?.rank ?? 0 },
+      { role: 'Mentor', rank: mentors.find((s) => s.userId === userId)?.rank ?? 0 },
+    ].filter((s) => s.rank > 0);
     const claims = last.season
       ? await this.prisma.rewardClaim.findMany({ where: { userId, seasonId: last.season.id } })
       : [];
@@ -88,10 +104,7 @@ export class RewardsService {
 
     return rewards.map((r) => {
       const claim = claimMap.get(r.id);
-      const earned =
-        !!last.standing &&
-        this.appliesTo(r.targetRole, last.standing.role) &&
-        last.standing.rank <= r.minRank;
+      const earned = this.earnedBy(r, last.standings);
       return {
         id: r.id,
         type: r.type,
@@ -106,7 +119,7 @@ export class RewardsService {
         perks: r.perks as string[],
         gradientColors: r.gradientColors as [string, string],
         eligible: earned && !claim,
-        onTrack: this.appliesTo(r.targetRole, board) && myRank > 0 && myRank <= r.minRank,
+        onTrack: this.earnedBy(r, live),
         claimed: !!claim,
         claimedCode: claim?.code,
         earnedSeasonNumber: earned ? last.season?.number : undefined,
@@ -118,13 +131,8 @@ export class RewardsService {
     const reward = await this.prisma.seasonReward.findUnique({ where: { id: rewardId } });
     if (!reward || !reward.isActive) throw new NotFoundException('Reward not found');
 
-    const { season, standing } = await this.lastFinished(userId);
-    if (
-      !season ||
-      !standing ||
-      !this.appliesTo(reward.targetRole, standing.role) ||
-      standing.rank > reward.minRank
-    ) {
+    const { season, standings } = await this.lastFinished(userId);
+    if (!season || !this.earnedBy(reward, standings)) {
       throw new BadRequestException(
         'This reward is earned from a finished season’s final rank. Finish inside its range to claim it.',
       );

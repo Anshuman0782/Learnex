@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, Season, UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { seasonWindow } from '../gamification/leveling.js';
+import { skillKey } from '../../common/utils/skill.js';
 
 export interface StandingRow {
   userId: string;
@@ -62,15 +63,19 @@ export class SeasonService {
     window: Window,
     filter: { role?: UserRole; category?: string } = {},
   ): Promise<StandingRow[]> {
-    const userFilter: Prisma.UserWhereInput = { deletedAt: null };
-    if (filter.role) userFilter.role = filter.role;
-    if (filter.category && filter.category !== 'All') {
-      userFilter.hobby = { equals: filter.category, mode: 'insensitive' };
-    }
+    // A member can be a Learner in one skill and a Mentor in another, so a board
+    // counts the XP that was EARNED in that role (and skill), not the account.
+    const where: Prisma.XpEventWhereInput = {
+      createdAt: { gte: window.startsAt, lt: window.endsAt },
+      user: { deletedAt: null },
+    };
+    if (filter.role === UserRole.MENTOR) where.role = 'Mentor';
+    else if (filter.role === UserRole.LEARNER) where.role = 'Learner';
+    if (filter.category && filter.category !== 'All') where.skill = skillKey(filter.category);
 
     const sums = await this.prisma.xpEvent.groupBy({
       by: ['userId'],
-      where: { createdAt: { gte: window.startsAt, lt: window.endsAt }, user: userFilter },
+      where,
       _sum: { amount: true },
       _max: { createdAt: true },
     });

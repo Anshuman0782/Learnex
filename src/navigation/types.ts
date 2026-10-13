@@ -16,7 +16,9 @@ export type AuthStackParamList = {
   ForgotPassword: undefined;
   CommunityRecommendation: undefined;
   RoleSelection: undefined;
-  MentorQuiz: undefined;
+  /** `skill`: test for this skill; `addSkill`: opened from the profile, not sign-up. */
+  MentorQuiz: { skill?: string; addSkill?: boolean } | undefined;
+  AddSkill: undefined;
   Main: NavigatorScreenParams<MainTabParamList>;
 };
 

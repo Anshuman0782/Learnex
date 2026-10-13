@@ -58,6 +58,8 @@ model User {
   prevRefreshTokenHash String?   @map("prev_refresh_token_hash")
   refreshRotatedAt     DateTime? @map("refresh_rotated_at")
 
+  /// Every skill the member has joined, each with its own role.
+  skills       UserSkill[]
   memberships  CommunityMembership[]
   posts        Post[]
   comments     Comment[]
@@ -99,6 +101,27 @@ model User {
 /// A hobby-based community/circle. Core fields are columns; the richer display
 /// data (tags, avatar stack, stats, seeded mentors/members) is JSON to mirror
 /// the app's shape exactly. Real join/leave lives in CommunityMembership.
+/// A skill a member has joined (Music, Coding, ...) and their role IN THAT SKILL.
+/// One member can be a Learner in one skill and a Mentor in another. The
+/// member's main skill is mirrored on User.hobby / User.role. Guests have none.
+model UserSkill {
+  id       String   @id @default(uuid())
+  userId   String   @map("user_id")
+  /// Display label, as the member typed/picked it.
+  skill    String
+  /// Lower-cased label — "music" and "Music" are one skill.
+  skillKey String   @map("skill_key")
+  role     UserRole
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, skillKey])
+  @@index([skillKey, role])
+  @@map("user_skills")
+}
+
 model Community {
   id          String  @id
   name        String
@@ -209,6 +232,9 @@ model Post {
   isHidden       Boolean  @default(false) @map("is_hidden")
   // Discussion card background (whitelisted palette key; null = default).
   bgStyle        String?  @map("bg_style")
+  /// The skill this post belongs to (one of the author's skills). XP, comment
+  /// roles and critique rights on this post all follow this skill.
+  skill          String?
 
   author      User            @relation(fields: [authorId], references: [id], onDelete: Cascade)
   communities PostCommunity[]
@@ -417,11 +443,16 @@ model XpEvent {
   // are counted per rule from this column.
   ruleKey   String?  @map("rule_key")
   dedupeKey String?  @unique @map("dedupe_key")
+  /// Which skill earned it (lower-cased key) and the member's role in that
+  /// skill at the time — 'Learner' | 'Mentor'. Boards are built from these.
+  skill     String?
+  role      String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([role, skill, createdAt])
   @@index([userId])
   @@index([userId, createdAt])
   @@index([userId, ruleKey, createdAt])
@@ -543,7 +574,8 @@ model SeasonStanding {
 
   createdAt DateTime @default(now()) @map("created_at")
 
-  @@unique([seasonId, userId])
+  // A member with Learner AND Mentor skills is ranked on both boards.
+  @@unique([seasonId, userId, role])
   @@index([seasonId, role, rank])
   @@map("season_standings")
 }

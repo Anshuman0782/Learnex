@@ -77,7 +77,14 @@ export const AddContentPlaceholderScreen: React.FC = () => {
     logGoalSession,
     activeGoal,
     user,
+    mySkills,
   } = useApp();
+
+  // Members with several skills choose which one a post belongs to — XP, the
+  // role badge and who can critique it all follow that skill.
+  const [postSkill, setPostSkill] = useState<string | null>(null);
+  const activeSkill =
+    mySkills.find((s) => s.skill === postSkill)?.skill ?? mySkills.find((s) => s.isPrimary)?.skill ?? mySkills[0]?.skill;
 
   const joinedCommunityObjects = getJoinedCommunityObjects();
 
@@ -510,7 +517,7 @@ export const AddContentPlaceholderScreen: React.FC = () => {
         communityIds: isShort ? selectedCommunityIds : selectedCommunityIds,
         communityId: selectedCommunityIds[0],
         // Tag = the creator's own focus (e.g. #Dance) — no made-up default.
-        tag: selectedTags.join(' ') || (user?.hobby ? `#${user.hobby.replace(/\s+/g, '')}` : ''),
+        tag: selectedTags.join(' ') || ((activeSkill || user?.hobby) ? `#${(activeSkill || user!.hobby).replace(/\s+/g, '')}` : ''),
         tags: selectedTags,
         postType,
         videoUrl,
@@ -522,6 +529,7 @@ export const AddContentPlaceholderScreen: React.FC = () => {
         isPrivate: scheduleMode ? false : isPrivate,
         scheduledAt: scheduledIso,
         focusArea: selectedTags.map((t) => t.replace('#', '')).join(', '),
+        skill: activeSkill,
       });
 
       setTitle('');
@@ -1187,6 +1195,39 @@ export const AddContentPlaceholderScreen: React.FC = () => {
             </View>
             )}
 
+            {/* Skill selector — only when the member has more than one skill */}
+            {mySkills.length > 1 && (
+              <View style={styles.sectionContainer}>
+                <Text style={styles.sectionHeader}>Posting in</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.chipsScroll}
+                >
+                  {mySkills.map((s) => {
+                    const active = s.skill === activeSkill;
+                    return (
+                      <TouchableOpacity
+                        key={s.skill}
+                        activeOpacity={0.8}
+                        onPress={() => setPostSkill(s.skill)}
+                        style={[styles.skillPick, active && styles.skillPickActive]}
+                      >
+                        <Ionicons
+                          name={s.role === 'Mentor' ? 'ribbon' : 'school'}
+                          size={13}
+                          color={active ? '#FFFFFF' : '#4F46E5'}
+                        />
+                        <Text style={[styles.skillPickText, active && styles.skillPickTextActive]}>
+                          {s.skill} · {s.role}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+
             {/* Target Communities Selector */}
             <View style={styles.sectionContainer}>
               <Text style={styles.sectionHeader}>
@@ -1798,6 +1839,18 @@ const styles = StyleSheet.create({
   goalInputGroup: {
     gap: 6,
   },
+  skillPick: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#EEF2FF',
+  },
+  skillPickActive: { backgroundColor: '#4F46E5' },
+  skillPickText: { fontSize: 12, fontWeight: '700', color: '#4338CA' },
+  skillPickTextActive: { color: '#FFFFFF' },
   inputLabel: {
     fontSize: 12,
     fontWeight: '600',

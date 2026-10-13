@@ -120,6 +120,6 @@ export class PostsController {
     @Param('id') id: string,
     @Body() dto: AddCommentDto,
   ) {
-    return this.posts.addComment(user.userId, id, dto, user.role);
+    return this.posts.addComment(user.userId, id, dto);
   }
 }

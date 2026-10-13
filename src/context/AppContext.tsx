@@ -33,7 +33,13 @@ import {
   type ApiUser,
   type AuthResponse,
 } from '../api/auth.api';
-import { enrollAsLearnerRequest, continueAsGuestRequest } from '../api/onboarding.api';
+import {
+  enrollAsLearnerRequest,
+  continueAsGuestRequest,
+  getMySkillsRequest,
+  setPrimarySkillRequest,
+  type ApiUserSkill,
+} from '../api/onboarding.api';
 import {
   getRecommendedCommunitiesRequest,
   getJoinedCommunitiesRequest,
@@ -186,6 +192,8 @@ interface CreatePostPayload {
   scheduledAt?: string;
   focusArea?: string;
   bgStyle?: string;
+  /** Which of the member's skills the post belongs to (default: main skill). */
+  skill?: string;
 }
 
 interface AppContextType {
@@ -279,7 +287,16 @@ interface AppContextType {
   deletePost: (postId: string) => Promise<void>;
   setPostPrivacy: (postId: string, isPrivate: boolean) => Promise<CommunityPost>;
   createPost: (payload: CreatePostPayload) => Promise<void>;
-  enrollAsLearner: () => Promise<void>;
+  enrollAsLearner: (skill?: string) => Promise<void>;
+  /** The member's skills, each with its own role and XP (empty for guests). */
+  mySkills: ApiUserSkill[];
+  refreshSkills: () => Promise<void>;
+  /** Join another skill as a Learner. */
+  addLearnerSkill: (skill: string) => Promise<void>;
+  /** Make one of the member's skills their main skill. */
+  setPrimarySkill: (skill: string) => Promise<void>;
+  /** The member's role in a given skill (posts, comments and critiques follow it). */
+  roleInSkill: (skill?: string | null) => UserRole | null;
   /** Guest: post / comment / chat like anyone, but no XP and not ranked. */
   continueAsGuest: () => Promise<void>;
   applyMentorSession: (session: AuthResponse) => Promise<void>;
@@ -328,6 +345,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [selectedHobby, setSelectedHobby] = useState<string>('Music');
   const [joinedCommunities, setJoinedCommunities] = useState<string[]>([]);
   const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
+  const [mySkills, setMySkills] = useState<ApiUserSkill[]>([]);
   // Community & skill catalog, loaded from the backend once authenticated.
   const [recommendedCommunities, setRecommendedCommunities] = useState<Community[]>([]);
   const [joinedCommunityObjects, setJoinedCommunityObjects] = useState<Community[]>([]);
@@ -1555,6 +1573,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         imageUrls: payload.imageUrls,
         isShort: payload.isShort,
         scheduledAt: payload.scheduledAt,
+        skill: payload.skill,
       });
       // Scheduled posts stay hidden from the live feeds until their time.
       if (created.isScheduled) {
@@ -1581,17 +1600,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     applySession(apiUser);
   };
 
-  const enrollAsLearner = async (): Promise<void> => {
-    const { user: apiUser, tokens } = await enrollAsLearnerRequest();
+  const enrollAsLearner = async (skill?: string): Promise<void> => {
+    const { user: apiUser, tokens } = await enrollAsLearnerRequest(skill);
     await saveTokens(tokens);
     applySession(apiUser);
+    await refreshSkills();
   };
 
   /** Mentor path: apply the session the quiz-submit returned after a pass. */
   const applyMentorSession = async (session: AuthResponse): Promise<void> => {
     await saveTokens(session.tokens);
     applySession(session.user);
+    await refreshSkills();
   };
+
+  // ---------- skills (one role per skill) ----------
+
+  const refreshSkills = async (): Promise<void> => {
+    try {
+      setMySkills(await getMySkillsRequest());
+    } catch {
+      /* keep what we have — offline / server waking up */
+    }
+  };
+
+  const addLearnerSkill = (skill: string): Promise<void> => enrollAsLearner(skill);
+
+  const setPrimarySkill = async (skill: string): Promise<void> => {
+    const { user: apiUser, tokens } = await setPrimarySkillRequest(skill);
+    await saveTokens(tokens);
+    applySession(apiUser);
+    await refreshSkills();
+    // A new main skill changes which circles are recommended.
+    getRecommendedCommunitiesRequest().then((c) => setRecommendedCommunities(c as any)).catch(() => {});
+  };
+
+  const roleInSkill = (skill?: string | null): UserRole | null => {
+    if (selectedRole === 'Guest' || !selectedRole) return selectedRole;
+    const key = (skill ?? '').trim().toLowerCase();
+    const hit = mySkills.find((s) => s.skill.trim().toLowerCase() === key);
+    // Not joined that skill → an ordinary participant there, never a Mentor.
+    if (hit) return hit.role;
+    return mySkills.length === 0 && key === (user?.hobby ?? '').trim().toLowerCase() ? selectedRole : 'Learner';
+  };
+
+  // Load the member's skills whenever the account (or its main role) changes.
+  useEffect(() => {
+    if (user?.id && (selectedRole === 'Learner' || selectedRole === 'Mentor')) void refreshSkills();
+    else setMySkills([]);
+  }, [user?.id, selectedRole]);
 
   // App-icon badge = unread notifications + unread chat messages.
   useEffect(() => {
@@ -1713,6 +1770,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setPostPrivacy,
         createPost,
         enrollAsLearner,
+        mySkills,
+        refreshSkills,
+        addLearnerSkill,
+        setPrimarySkill,
+        roleInSkill,
         continueAsGuest,
         applyMentorSession,
         logout,

@@ -16,6 +16,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { GuestUpgradeBanner } from '../../components/common/GuestUpgradeBanner';
+import { MySkillsCard } from '../../components/profile/MySkillsCard';
 import { useApp } from '../../context/AppContext';
 import { Avatar, ConfirmModal } from '../../components/common';
 import { EditProfileModal } from '../../components/profile/EditProfileModal';
@@ -406,13 +407,18 @@ export const ProfilePlaceholderScreen: React.FC<ProfilePlaceholderScreenProps> =
                 <GuestUpgradeBanner onBeforeUpgrade={closeMyProfile} />
               </View>
 
-              {/* Primary Skill Pill */}
+              {/* Every skill + role, and "Add skill" (members only) */}
+              <MySkillsCard onBeforeNavigate={closeMyProfile} />
+
+              {/* Focus pill — guests only (members see their skills card above) */}
+              {selectedRole === 'Guest' && !!selectedHobby && (
               <View style={styles.trackPillsRow}>
                 <View style={styles.skillTrackPill}>
-                  <Ionicons name="mic" size={11} color="#4F46E5" />
-                  <Text style={styles.skillTrackPillText}>{selectedHobby || 'Music'}</Text>
+                  <Ionicons name="sparkles" size={11} color="#4F46E5" />
+                  <Text style={styles.skillTrackPillText}>{selectedHobby}</Text>
                 </View>
               </View>
+              )}
             </View>
           </View>
         </View>

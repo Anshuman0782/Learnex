@@ -81,6 +81,12 @@ export class CreatePostDto {
   @IsBoolean()
   isShort?: boolean;
 
+  /** Which of the author's skills this post belongs to (defaults to their main skill). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  skill?: string;
+
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(5)
