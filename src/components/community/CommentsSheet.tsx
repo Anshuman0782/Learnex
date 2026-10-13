@@ -40,6 +40,7 @@ export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: pos
     openUserProfile,
     showDialog,
     user,
+    roleInSkill,
   } = useApp();
 
   const post = useMemo(() => {
@@ -53,8 +54,14 @@ export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: pos
 
   const [tab, setTab] = useState<'all' | 'mentor' | 'general'>('all');
   const [text, setText] = useState('');
+  // null = not chosen yet → a Mentor in this post's skill comments as a Mentor.
+  const [composeChoice, setComposeChoice] = useState<'general' | 'mentor' | null>(null);
 
   if (!post) return null;
+
+  // Mentor comments need a Mentor IN THIS POST'S SKILL, on someone else's post.
+  const canMentor = roleInSkill(post.authorSkill) === 'Mentor' && post.authorId !== user?.id;
+  const composeType: 'general' | 'mentor' = canMentor ? composeChoice ?? 'mentor' : 'general';
 
   const all = post.comments || [];
   const mentor = all.filter((c) => c.isMentorCritique || c.commentType === 'mentor');
@@ -68,8 +75,8 @@ export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: pos
     }
     addCommentToPost(post.id, {
       text: text.trim(),
-      commentType: 'general',
-      isMentorCritique: false,
+      commentType: composeType,
+      isMentorCritique: composeType === 'mentor',
     });
     setText('');
   };
@@ -130,7 +137,7 @@ export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: pos
                       <View style={{ flex: 1 }}>
                         <View style={styles.nameLine}>
                           <Text style={styles.authorName}>{c.authorName}</Text>
-                          {isCritique && (
+                          {(isCritique || c.authorRole === 'Mentor') && (
                             <View style={styles.mentorTag}>
                               <Ionicons name="star" size={9} color="#7C3AED" />
                               <Text style={styles.mentorTagText}>Mentor</Text>
@@ -191,12 +198,39 @@ export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: pos
             )}
           </ScrollView>
 
+          {/* Mentors in this skill choose how the comment counts */}
+          {canMentor && (
+            <View style={styles.postingAs}>
+              <Text style={styles.postingAsLabel}>Posting as:</Text>
+              {(['mentor', 'general'] as const).map((k) => {
+                const active = composeType === k;
+                return (
+                  <TouchableOpacity
+                    key={k}
+                    activeOpacity={0.8}
+                    onPress={() => setComposeChoice(k)}
+                    style={[styles.postingAsBtn, active && (k === 'mentor' ? styles.postingAsMentor : styles.postingAsGeneral)]}
+                  >
+                    <Ionicons
+                      name={k === 'mentor' ? 'ribbon-outline' : 'chatbubble-outline'}
+                      size={12}
+                      color={active ? '#FFFFFF' : k === 'mentor' ? '#7C3AED' : '#4F46E5'}
+                    />
+                    <Text style={[styles.postingAsText, active && styles.postingAsTextActive]}>
+                      {k === 'mentor' ? `${post.authorSkill || ''} Mentor`.trim() : 'General'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
           {/* Composer */}
-          <View style={[styles.composer, { paddingBottom: composerPad }]}>
+          <View style={[styles.composer, canMentor && styles.composerNoBorder, { paddingBottom: composerPad }]}>
             <TextInput
               value={text}
               onChangeText={setText}
-              placeholder="Add a comment…"
+              placeholder={composeType === 'mentor' ? 'Write your mentor feedback…' : 'Add a comment…'}
               placeholderTextColor="#94A3B8"
               style={styles.input}
               multiline
@@ -282,6 +316,31 @@ const styles = StyleSheet.create({
   actionCount: { fontSize: 11, color: '#64748B' },
   empty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 40, gap: 8 },
   emptyText: { fontSize: 12, color: '#94A3B8' },
+  postingAs: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: spacing.base,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  postingAsLabel: { fontSize: 11, color: '#64748B' },
+  postingAsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  postingAsMentor: { backgroundColor: '#7C3AED', borderColor: '#7C3AED' },
+  postingAsGeneral: { backgroundColor: '#4F46E5', borderColor: '#4F46E5' },
+  postingAsText: { fontSize: 11, fontWeight: '600', color: '#64748B' },
+  postingAsTextActive: { color: '#FFFFFF', fontWeight: 'bold' },
+  composerNoBorder: { borderTopWidth: 0 },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',

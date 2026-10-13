@@ -76,7 +76,8 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
   const videoUrl = post?.videoUrl ?? null;
 
   const [commentTypeTab, setCommentTypeTab] = useState<'all' | 'mentor' | 'general'>('all');
-  const [composeType, setComposeType] = useState<'general' | 'mentor'>('general');
+  // null = not chosen yet → a Mentor in this post's skill comments as a Mentor.
+  const [composeChoice, setComposeType] = useState<'general' | 'mentor' | null>(null);
   const [commentText, setCommentText] = useState('');
   const [mentorRating, setMentorRating] = useState(5);
   const [critiqueFocus, setCritiqueFocus] = useState('Technique Fix');
@@ -169,6 +170,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
   // Mentor critiques need a Mentor IN THIS POST'S SKILL (a Coding mentor is a
   // regular member on a Music post).
   const isMentor = roleInSkill(post.authorSkill) === 'Mentor';
+  const composeType: 'general' | 'mentor' = isMentor ? composeChoice ?? 'mentor' : 'general';
   const isSaved = !!post.isSaved;
 
   const mentorCritiques = post.comments?.filter((c) => c.isMentorCritique || c.commentType === 'mentor') || [];
