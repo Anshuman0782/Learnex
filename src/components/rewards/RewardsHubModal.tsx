@@ -80,6 +80,7 @@ export const RewardsHubModal: React.FC<RewardsHubModalProps> = ({
     claimXPTask,
     userStats,
     xpRulesVersion,
+    mySkills,
     activeRewardClaimModal,
     openRewardClaimModal,
     closeRewardClaimModal,
@@ -95,9 +96,11 @@ export const RewardsHubModal: React.FC<RewardsHubModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [claimingId, setClaimingId] = useState<string | null>(null);
+  // Activity filter: everything, or only the XP earned as a Learner / Mentor.
+  const [activityRole, setActivityRole] = useState<'All' | 'Learner' | 'Mentor'>('All');
 
   const load = useCallback(async () => {
-    const [rb, hist] = await Promise.allSettled([getXpRulesRequest(), getXpHistoryRequest(40)]);
+    const [rb, hist] = await Promise.allSettled([getXpRulesRequest(), getXpHistoryRequest(100)]);
     if (rb.status === 'fulfilled') setRulebook(rb.value);
     if (hist.status === 'fulfilled') setHistory(hist.value);
   }, []);
@@ -129,7 +132,7 @@ export const RewardsHubModal: React.FC<RewardsHubModalProps> = ({
     setClaimingId(null);
     if (res) {
       Alert.alert('XP claimed', `+${res.earnedXP} XP for “${res.taskTitle}”.`);
-      getXpHistoryRequest(40).then(setHistory).catch(() => {});
+      getXpHistoryRequest(100).then(setHistory).catch(() => {});
     } else {
       Alert.alert('Could not claim', 'This quest isn’t complete yet, or it was already claimed.');
     }
@@ -162,8 +165,17 @@ export const RewardsHubModal: React.FC<RewardsHubModalProps> = ({
   }, [rulebook, rulesFor]);
 
   const questsForBoard = (rulebook?.quests ?? []).filter((q) => q.role === rulesFor);
-  const historyThisSeason = history.filter((h) => h.thisSeason);
-  const historyEarlier = history.filter((h) => !h.thisSeason);
+  // A member who is a Learner in one skill and a Mentor in another sees both
+  // kinds of XP — tagged per row, with a filter and a per-role season total.
+  const hasBothRoles =
+    mySkills.some((s) => s.role === 'Learner') && mySkills.some((s) => s.role === 'Mentor');
+  const roleTotals = {
+    Learner: mySkills.filter((s) => s.role === 'Learner').reduce((n, s) => n + s.seasonXp, 0),
+    Mentor: mySkills.filter((s) => s.role === 'Mentor').reduce((n, s) => n + s.seasonXp, 0),
+  };
+  const shownHistory = activityRole === 'All' ? history : history.filter((h) => h.role === activityRole);
+  const historyThisSeason = shownHistory.filter((h) => h.thisSeason);
+  const historyEarlier = shownHistory.filter((h) => !h.thisSeason);
 
   // ----- render helpers -----
   const renderQuest = (task: XPTask) => {
@@ -235,7 +247,16 @@ export const RewardsHubModal: React.FC<RewardsHubModalProps> = ({
       </View>
       <View style={styles.flex1}>
         <Text style={styles.historyLabel} numberOfLines={1}>{h.label}</Text>
-        <Text style={styles.historyTime}>{timeAgo(h.createdAt)}</Text>
+        <View style={styles.historyMetaRow}>
+          {!!h.skill && (
+            <View style={[styles.historyTag, h.role === 'Mentor' ? styles.historyTagMentor : styles.historyTagLearner]}>
+              <Text style={[styles.historyTagText, h.role === 'Mentor' ? styles.historyTagTextMentor : styles.historyTagTextLearner]}>
+                {h.skill}{h.role ? ` · ${h.role}` : ''}
+              </Text>
+            </View>
+          )}
+          <Text style={styles.historyTime}>{timeAgo(h.createdAt)}</Text>
+        </View>
       </View>
       <Text style={[styles.historyAmount, h.amount < 0 && { color: '#DC2626' }]}>
         {h.amount > 0 ? '+' : ''}{h.amount} XP
@@ -416,7 +437,35 @@ export const RewardsHubModal: React.FC<RewardsHubModalProps> = ({
             {/* ---------------- ACTIVITY ---------------- */}
             {tab === 'activity' && (
               <>
-                {history.length === 0 ? (
+                {hasBothRoles && history.length > 0 && (
+                  <View style={styles.activityHead}>
+                    <View style={styles.roleTotals}>
+                      <View style={[styles.roleTotal, { backgroundColor: '#EEF2FF' }]}>
+                        <Text style={[styles.roleTotalValue, { color: '#4338CA' }]}>{roleTotals.Learner.toLocaleString()}</Text>
+                        <Text style={styles.roleTotalLabel}>XP as Learner · this season</Text>
+                      </View>
+                      <View style={[styles.roleTotal, { backgroundColor: '#F5F3FF' }]}>
+                        <Text style={[styles.roleTotalValue, { color: '#7C3AED' }]}>{roleTotals.Mentor.toLocaleString()}</Text>
+                        <Text style={styles.roleTotalLabel}>XP as Mentor · this season</Text>
+                      </View>
+                    </View>
+                    <View style={styles.activityFilter}>
+                      {(['All', 'Learner', 'Mentor'] as const).map((r) => (
+                        <TouchableOpacity
+                          key={r}
+                          activeOpacity={0.8}
+                          onPress={() => setActivityRole(r)}
+                          style={[styles.activityChip, activityRole === r && styles.activityChipActive]}
+                        >
+                          <Text style={[styles.activityChipText, activityRole === r && styles.activityChipTextActive]}>
+                            {r === 'All' ? 'All' : `As ${r}`}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </View>
+                )}
+                {shownHistory.length === 0 ? (
                   <View style={styles.empty}>
                     <Ionicons name="pulse-outline" size={34} color="#CBD5E1" />
                     <Text style={styles.emptyTitle}>No XP yet</Text>
@@ -745,6 +794,23 @@ const styles = StyleSheet.create({
   historyIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
   historyLabel: { fontSize: 13, fontWeight: '600', color: '#0F172A' },
   historyTime: { fontSize: 11, color: '#94A3B8', marginTop: 1 },
+  historyMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'wrap' },
+  historyTag: { paddingHorizontal: 7, paddingVertical: 1, borderRadius: 999 },
+  historyTagLearner: { backgroundColor: '#EEF2FF' },
+  historyTagMentor: { backgroundColor: '#F5F3FF' },
+  historyTagText: { fontSize: 10, fontWeight: '800' },
+  historyTagTextLearner: { color: '#4338CA' },
+  historyTagTextMentor: { color: '#7C3AED' },
+  activityHead: { gap: 10, marginBottom: 4 },
+  roleTotals: { flexDirection: 'row', gap: 10 },
+  roleTotal: { flex: 1, borderRadius: 14, padding: 12 },
+  roleTotalValue: { fontSize: 20, fontWeight: '900' },
+  roleTotalLabel: { fontSize: 11, color: '#64748B', marginTop: 2 },
+  activityFilter: { flexDirection: 'row', gap: 8 },
+  activityChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, backgroundColor: '#F1F5F9' },
+  activityChipActive: { backgroundColor: '#4F46E5' },
+  activityChipText: { fontSize: 12, fontWeight: '700', color: '#475569' },
+  activityChipTextActive: { color: '#FFFFFF' },
   historyAmount: { fontSize: 13, fontWeight: '800', color: '#16A34A' },
 
   empty: { alignItems: 'center', paddingVertical: 36, paddingHorizontal: 20, gap: 8 },

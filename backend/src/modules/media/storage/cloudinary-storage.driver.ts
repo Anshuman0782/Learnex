@@ -44,10 +44,14 @@ export class CloudinaryStorageDriver implements StorageDriver {
     return createHash('sha1').update(toSign + this.creds.apiSecret).digest('hex');
   }
 
-  async save({ buffer, mimeType, subdir }: SaveInput): Promise<StoredFile> {
-    const resourceType = mimeType.startsWith('image/') ? 'image' : 'video';
+  async save({ buffer, mimeType, subdir, originalName }: SaveInput): Promise<StoredFile> {
+    // Documents are stored as Cloudinary "raw" files; raw ids keep their
+    // extension so the download opens in the right app.
+    const isRaw = !mimeType.startsWith('image/') && !mimeType.startsWith('video/') && !mimeType.startsWith('audio/');
+    const resourceType = mimeType.startsWith('image/') ? 'image' : isRaw ? 'raw' : 'video';
     const folder = `${CLOUD_FOLDER}/${subdir}`;
-    const publicId = randomUUID();
+    const ext = (/\.([A-Za-z0-9]{1,5})$/.exec(originalName ?? '')?.[1] ?? '').toLowerCase();
+    const publicId = isRaw && ext ? `${randomUUID()}.${ext}` : randomUUID();
     const params: Record<string, string> = {
       folder,
       public_id: publicId,

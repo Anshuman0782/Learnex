@@ -55,6 +55,9 @@ export interface XpHistoryRow {
   amount: number;
   createdAt: string;
   thisSeason: boolean;
+  /** The skill it was earned in, and the role held there. */
+  skill?: string | null;
+  role?: 'Learner' | 'Mentor' | null;
 }
 
 /** The live rulebook — exactly what the server enforces. */
@@ -63,7 +66,7 @@ export function getXpRulesRequest(): Promise<XpRulebook> {
 }
 
 /** The current user's recent XP activity. */
-export function getXpHistoryRequest(limit = 40): Promise<XpHistoryRow[]> {
+export function getXpHistoryRequest(limit = 100): Promise<XpHistoryRow[]> {
   return apiRequest<XpHistoryRow[]>(`/gamification/history?limit=${limit}`);
 }
 

@@ -849,8 +849,19 @@ model Message {
   id             String    @id @default(uuid())
   conversationId String    @map("conversation_id")
   senderId       String    @map("sender_id")
-  text           String    @db.Text
+  /// Caption / message text. Empty when the message is only an attachment.
+  text           String    @default("") @db.Text
   readAt         DateTime? @map("read_at")
+
+  /// One attachment (photo, video, voice/audio or document), uploaded through
+  /// /media/upload first. Only our own storage URLs are accepted.
+  attachmentUrl        String? @map("attachment_url")
+  /// 'image' | 'video' | 'audio' | 'file'
+  attachmentType       String? @map("attachment_type")
+  attachmentName       String? @map("attachment_name")
+  attachmentMime       String? @map("attachment_mime")
+  attachmentSize       Int?    @map("attachment_size")
+  attachmentDurationMs Int?    @map("attachment_duration_ms")
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)

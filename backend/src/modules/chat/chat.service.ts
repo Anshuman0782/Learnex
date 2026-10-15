@@ -8,6 +8,7 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { RealtimeGateway } from '../realtime/realtime.gateway.js';
 import { PushService } from '../push/push.service.js';
+import { CLOUD_FOLDER, parseCloudinaryUrl } from '../media/storage/cloudinary-storage.driver.js';
 
 const PAGE_SIZE = 30;
 
@@ -24,13 +25,39 @@ export interface ChatUser {
   canCall: boolean;
 }
 
+export type AttachmentKind = 'image' | 'video' | 'audio' | 'file';
+
+export interface ChatAttachment {
+  url: string;
+  type: AttachmentKind;
+  name?: string;
+  mime?: string;
+  size?: number;
+  durationMs?: number;
+}
+
 export interface ChatMessageView {
   id: string;
   conversationId: string;
   senderId: string;
   text: string;
+  attachment: ChatAttachment | null;
   createdAt: string;
   readAt: string | null;
+}
+
+/** Short label for a message — inbox preview and push body. */
+export function previewOf(m: { text: string; attachment: ChatAttachment | null }): string {
+  if (!m.attachment) return m.text;
+  const label =
+    m.attachment.type === 'image'
+      ? '📷 Photo'
+      : m.attachment.type === 'video'
+      ? '🎥 Video'
+      : m.attachment.type === 'audio'
+      ? '🎤 Audio'
+      : `📄 ${m.attachment.name || 'Document'}`;
+  return m.text ? `${label} · ${m.text}` : label;
 }
 
 export interface ConversationView {
@@ -48,14 +75,45 @@ const toMessage = (m: {
   text: string;
   createdAt: Date;
   readAt: Date | null;
+  attachmentUrl?: string | null;
+  attachmentType?: string | null;
+  attachmentName?: string | null;
+  attachmentMime?: string | null;
+  attachmentSize?: number | null;
+  attachmentDurationMs?: number | null;
 }): ChatMessageView => ({
   id: m.id,
   conversationId: m.conversationId,
   senderId: m.senderId,
   text: m.text,
+  attachment: m.attachmentUrl
+    ? {
+        url: m.attachmentUrl,
+        type: (m.attachmentType ?? 'file') as AttachmentKind,
+        name: m.attachmentName ?? undefined,
+        mime: m.attachmentMime ?? undefined,
+        size: m.attachmentSize ?? undefined,
+        durationMs: m.attachmentDurationMs ?? undefined,
+      }
+    : null,
   createdAt: m.createdAt.toISOString(),
   readAt: m.readAt?.toISOString() ?? null,
 });
+
+/**
+ * Attachments must be files uploaded to LERNEX's own storage (our Cloudinary
+ * folder in production, our /uploads folder in local development) — never an
+ * arbitrary link.
+ */
+function isOwnUpload(url: string): boolean {
+  const cloud = parseCloudinaryUrl(process.env.CLOUDINARY_URL)?.cloudName;
+  if (cloud) {
+    return new RegExp(
+      `^https://res\\.cloudinary\\.com/${cloud}/(image|video|raw)/upload/[A-Za-z0-9._\\-/]*${CLOUD_FOLDER}/(images|videos|audio|files)/[A-Za-z0-9._\\-]+$`,
+    ).test(url);
+  }
+  return /^https?:\/\/[^\s/]+\/uploads\/(images|videos|audio|files)\/[A-Za-z0-9._-]+$/.test(url);
+}
 
 /**
  * Private 1:1 messaging. Only the two participants can read or write a
@@ -231,9 +289,17 @@ export class ChatService {
     };
   }
 
-  async send(userId: string, conversationId: string, rawText: string): Promise<ChatMessageView> {
+  async send(
+    userId: string,
+    conversationId: string,
+    rawText: string,
+    attachment?: ChatAttachment,
+  ): Promise<ChatMessageView> {
     const text = rawText.trim();
-    if (!text) throw new BadRequestException('Message is empty');
+    if (!text && !attachment) throw new BadRequestException('Message is empty');
+    if (attachment && !isOwnUpload(attachment.url)) {
+      throw new BadRequestException('Attachments must be uploaded to Lernex first');
+    }
     const { otherId } = await this.membership(userId, conversationId);
 
     const otherAlive = await this.prisma.user.findFirst({
@@ -244,7 +310,21 @@ export class ChatService {
 
     const msg = await this.prisma.$transaction(async (tx) => {
       const created = await tx.message.create({
-        data: { conversationId, senderId: userId, text },
+        data: {
+          conversationId,
+          senderId: userId,
+          text,
+          ...(attachment
+            ? {
+                attachmentUrl: attachment.url,
+                attachmentType: attachment.type,
+                attachmentName: attachment.name?.trim().slice(0, 200) || null,
+                attachmentMime: attachment.mime ?? null,
+                attachmentSize: attachment.size ?? null,
+                attachmentDurationMs: attachment.durationMs ?? null,
+              }
+            : {}),
+        },
       });
       await tx.conversation.update({
         where: { id: conversationId },
@@ -263,7 +343,10 @@ export class ChatService {
       const me = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true, avatarUrl: true } });
       void this.push.sendToUser(otherId, {
         title: me?.name ?? 'New message',
-        body: text.length > 140 ? `${text.slice(0, 137)}…` : text,
+        body: (() => {
+          const p = previewOf(view);
+          return p.length > 140 ? `${p.slice(0, 137)}…` : p;
+        })(),
         channel: 'messages',
         categoryId: 'chat_message', // inline "Reply" button
         data: { kind: 'chat', conversationId, userId, fromName: me?.name, fromAvatar: me?.avatarUrl ?? undefined },

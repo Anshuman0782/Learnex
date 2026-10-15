@@ -10,7 +10,23 @@ import {
   ActivityIndicator,
   Platform,
   Alert,
+  Keyboard,
+  Linking,
 } from 'react-native';
+import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio';
+import { uploadFileRequest } from '../../api/media.api';
+import {
+  CHAT_LIMIT_BYTES,
+  captureChatMedia,
+  pickChatAudio,
+  pickChatDocument,
+  pickChatMedia,
+  type AttachmentResult,
+  type PickedAttachment,
+} from '../../services/imagePicker';
+import { EmojiPanel } from './EmojiPanel';
+import { AttachmentSheet, type AttachmentSource } from './AttachmentSheet';
+import { ChatMediaViewer, MessageAttachment, formatBytes, type AudioState } from './MessageAttachment';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useComposerBottomPadding } from '../common/KeyboardSafe';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,6 +42,8 @@ import {
   markConversationReadRequest,
   openConversationRequest,
   sendMessageRequest,
+  messagePreview,
+  type ChatAttachment,
   type ChatMessage,
   type Conversation,
 } from '../../api/chat.api';
@@ -78,7 +96,7 @@ export const ChatModal: React.FC = () => {
   // ---- thread ----
   const [conv, setConv] = useState<Conversation | null>(null);
   const { startCall } = useCall();
-  const { openUserProfile } = useApp();
+  const { openUserProfile, closeAudioPost } = useApp();
   const [peer, setPeer] = useState<ChatPeer | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]); // newest first (inverted list)
   const [hasMore, setHasMore] = useState(false);
@@ -86,6 +104,175 @@ export const ChatModal: React.FC = () => {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [text, setText] = useState('');
   const convIdRef = useRef<string | null>(null);
+
+  // ---- composer extras: emoji keyboard, attachments, viewer, audio ----
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [showAttach, setShowAttach] = useState(false);
+  const [viewerMedia, setViewerMedia] = useState<ChatAttachment | null>(null);
+  const inputRef = useRef<TextInput>(null);
+  const selectionRef = useRef({ start: 0, end: 0 });
+  // Files being sent, by temp message id (kept for "tap to retry").
+  const pendingFiles = useRef(new Map<string, PickedAttachment>());
+  const uploadedFiles = useRef(new Map<string, ChatAttachment>());
+
+  // One chat audio player at a time (and never alongside a feed audio post).
+  const audioRef = useRef<AudioPlayer | null>(null);
+  const audioSubRef = useRef<{ remove: () => void } | null>(null);
+  const [audioState, setAudioState] = useState<AudioState | null>(null);
+
+  const stopChatAudio = () => {
+    audioSubRef.current?.remove();
+    audioSubRef.current = null;
+    const p = audioRef.current;
+    audioRef.current = null;
+    if (p) {
+      try {
+        p.pause();
+      } catch {
+        /* ignore */
+      }
+      try {
+        p.remove();
+      } catch {
+        /* ignore */
+      }
+    }
+    setAudioState(null);
+  };
+
+  const toggleAudio = (m: ChatMessage) => {
+    const url = m.attachment?.url;
+    if (!url) return;
+    const current = audioRef.current;
+    if (current && audioState?.id === m.id) {
+      try {
+        if (current.playing) current.pause();
+        else {
+          if (audioState.dur > 0 && audioState.pos >= audioState.dur - 0.3) void current.seekTo(0);
+          current.play();
+        }
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    stopChatAudio();
+    closeAudioPost();
+    try {
+      void setAudioModeAsync({ playsInSilentMode: true });
+      const p = createAudioPlayer({ uri: url }, { updateInterval: 200 });
+      audioRef.current = p;
+      audioSubRef.current = p.addListener('playbackStatusUpdate', (st) => {
+        if (audioRef.current !== p) return;
+        if (st.didJustFinish) {
+          try {
+            p.pause();
+            void p.seekTo(0);
+          } catch {
+            /* ignore */
+          }
+          setAudioState({ id: m.id, playing: false, pos: 0, dur: st.duration });
+          return;
+        }
+        setAudioState({ id: m.id, playing: st.playing, pos: st.currentTime, dur: st.duration });
+      });
+      p.play();
+      setAudioState({ id: m.id, playing: true, pos: 0, dur: (m.attachment?.durationMs ?? 0) / 1000 });
+    } catch {
+      stopChatAudio();
+    }
+  };
+
+  // Stop chat audio whenever the chat closes or switches conversation.
+  useEffect(() => {
+    return () => stopChatAudio();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatView]);
+
+  const openFile = (a: ChatAttachment) => {
+    Linking.openURL(a.url).catch(() => Alert.alert('Can’t open file', 'No app on this phone can open this file.'));
+  };
+
+  // Emoji keyboard: insert at the cursor / delete the character before it.
+  const insertEmoji = (e: string) => {
+    const { start, end } = selectionRef.current;
+    const s = Math.min(start, text.length);
+    const en = Math.min(Math.max(end, s), text.length);
+    const next = text.slice(0, s) + e + text.slice(en);
+    if (next.length > 2000) return;
+    setText(next);
+    selectionRef.current = { start: s + e.length, end: s + e.length };
+  };
+  const backspace = () => {
+    const { start, end } = selectionRef.current;
+    const s = Math.min(start, text.length);
+    const en = Math.min(Math.max(end, s), text.length);
+    if (s !== en) {
+      setText(text.slice(0, s) + text.slice(en));
+      selectionRef.current = { start: s, end: s };
+      return;
+    }
+    if (s === 0) return;
+    // Remove one whole symbol (emoji incl. joiners / variation selectors).
+    const before = Array.from(text.slice(0, s));
+    const isMod = (c: string) => /[\ufe0f\u{1F3FB}-\u{1F3FF}]/u.test(c);
+    const popSymbol = () => {
+      while (before.length && isMod(before[before.length - 1])) before.pop();
+      before.pop();
+    };
+    popSymbol();
+    // Joined emojis (e.g. a technologist) are several symbols glued with a zero-width joiner.
+    while (before.length && before[before.length - 1] === '\u200d') {
+      before.pop();
+      popSymbol();
+    }
+    const head = before.join('');
+    setText(head + text.slice(s));
+    selectionRef.current = { start: head.length, end: head.length };
+  };
+
+  const toggleEmoji = () => {
+    setShowAttach(false);
+    if (showEmoji) {
+      setShowEmoji(false);
+      inputRef.current?.focus();
+    } else {
+      Keyboard.dismiss();
+      setShowEmoji(true);
+    }
+  };
+
+  const pickAttachment = async (source: AttachmentSource) => {
+    let res: AttachmentResult;
+    try {
+      res =
+        source === 'gallery'
+          ? await pickChatMedia()
+          : source === 'camera'
+          ? await captureChatMedia()
+          : source === 'document'
+          ? await pickChatDocument()
+          : await pickChatAudio();
+    } catch {
+      Alert.alert('Attachment', 'Could not open that file. Please try again.');
+      return;
+    }
+    if (res.status === 'denied') {
+      Alert.alert('Access needed', 'Please allow LERNEX to use your camera / photos in your phone settings.');
+      return;
+    }
+    if (res.status === 'error') {
+      Alert.alert('Attachment', res.message);
+      return;
+    }
+    if (res.status !== 'ok') return;
+    const f = res.file;
+    if (f.size && f.size > CHAT_LIMIT_BYTES[f.type]) {
+      Alert.alert('File too large', `${f.type === 'file' ? 'Documents' : f.type === 'image' ? 'Photos' : f.type === 'video' ? 'Videos' : 'Audio files'} can be up to ${formatBytes(CHAT_LIMIT_BYTES[f.type])}.`);
+      return;
+    }
+    void send({ file: f });
+  };
 
   const loadInbox = useCallback(async () => {
     try {
@@ -103,6 +290,8 @@ export const ChatModal: React.FC = () => {
       setConv(null);
       setMessages([]);
       setText('');
+      setShowEmoji(false);
+      setShowAttach(false);
       setSearchMode(false);
       setQuery('');
       return;
@@ -164,7 +353,9 @@ export const ChatModal: React.FC = () => {
           if (prev.some((x) => x.id === m.id)) return prev;
           // Our own message echoed back: replace the optimistic copy.
           if (m.senderId === myId) {
-            const idx = prev.findIndex((x) => x.pending && x.text === m.text);
+            const idx = prev.findIndex(
+              (x) => x.pending && x.text === m.text && (x.attachment?.type ?? null) === (m.attachment?.type ?? null),
+            );
             if (idx >= 0) {
               const next = [...prev];
               next[idx] = m;
@@ -234,16 +425,27 @@ export const ChatModal: React.FC = () => {
     }
   };
 
-  const send = async (retry?: ChatMessage) => {
+  /**
+   * Send text, or an attachment (with the typed text as its caption). A file is
+   * uploaded first, then the message is sent. `retry` re-sends a failed one.
+   */
+  const send = async (opts: { retry?: ChatMessage; file?: PickedAttachment } = {}) => {
     if (!conv || !myId) return;
-    const body = (retry?.text ?? text).trim();
-    if (!body) return;
+    const { retry } = opts;
     const tempId = retry?.id ?? `temp-${Date.now()}`;
+    const file = opts.file ?? (retry ? pendingFiles.current.get(retry.id) : undefined);
+    const body = (retry ? retry.text : text).trim();
+    if (!body && !file) return;
+    if (opts.file) pendingFiles.current.set(tempId, opts.file);
+
     const optimistic: ChatMessage = {
       id: tempId,
       conversationId: conv.id,
       senderId: myId,
       text: body,
+      attachment: file
+        ? { url: file.uri, type: file.type, name: file.name, mime: file.mimeType, size: file.size, durationMs: file.durationMs }
+        : null,
       createdAt: new Date().toISOString(),
       readAt: null,
       pending: true,
@@ -253,15 +455,32 @@ export const ChatModal: React.FC = () => {
     } else {
       setMessages((prev) => [optimistic, ...prev]);
       setText('');
+      selectionRef.current = { start: 0, end: 0 };
     }
     try {
-      const saved = await sendMessageRequest(conv.id, body);
+      let attachment = uploadedFiles.current.get(tempId);
+      if (file && !attachment) {
+        const up = await uploadFileRequest(file.uri, file.mimeType, file.name);
+        attachment = {
+          url: up.url,
+          type: file.type,
+          name: file.name,
+          mime: file.mimeType,
+          size: up.size || file.size,
+          durationMs: file.durationMs ? Math.round(file.durationMs) : undefined,
+        };
+        uploadedFiles.current.set(tempId, attachment); // a retry won't re-upload
+      }
+      const saved = await sendMessageRequest(conv.id, body, attachment);
+      pendingFiles.current.delete(tempId);
+      uploadedFiles.current.delete(tempId);
       setMessages((prev) => {
         const withoutTemp = prev.filter((m) => m.id !== tempId);
         return withoutTemp.some((m) => m.id === saved.id) ? withoutTemp : [saved, ...withoutTemp];
       });
-    } catch {
+    } catch (e) {
       setMessages((prev) => prev.map((m) => (m.id === tempId ? { ...m, pending: false, failed: true } : m)));
+      if (file) Alert.alert('Not sent', (e as Error)?.message || 'The file could not be sent. Tap it to retry.');
     }
   };
 
@@ -302,7 +521,7 @@ export const ChatModal: React.FC = () => {
               style={[styles.convPreview, item.unreadCount > 0 && styles.convPreviewUnread]}
               numberOfLines={1}
             >
-              {item.lastMessage ? `${mine ? 'You: ' : ''}${item.lastMessage.text}` : 'Say hello 👋'}
+              {item.lastMessage ? `${mine ? 'You: ' : ''}${messagePreview(item.lastMessage)}` : 'Say hello 👋'}
             </Text>
             {item.unreadCount > 0 && (
               <View style={styles.unreadBadge}>
@@ -321,6 +540,11 @@ export const ChatModal: React.FC = () => {
     const older = messages[index + 1];
     const showDay = !older || !sameDay(older.createdAt, item.createdAt);
     const isLatestMine = mine && messages.findIndex((m) => m.senderId === myId) === index;
+    // Instagram-style: their avatar sits beside the LAST message of each run.
+    const newer = messages[index - 1];
+    const lastOfRun = !newer || newer.senderId !== item.senderId || !sameDay(newer.createdAt, item.createdAt);
+    const a = item.attachment;
+    const isMedia = a?.type === 'image' || a?.type === 'video';
     return (
       <View>
         {showDay && (
@@ -328,14 +552,54 @@ export const ChatModal: React.FC = () => {
             <Text style={styles.dayText}>{dayLabel(item.createdAt)}</Text>
           </View>
         )}
-        <View style={[styles.bubbleRow, mine ? styles.rowMine : styles.rowTheirs]}>
+        <View style={[styles.bubbleRow, mine ? styles.rowMine : styles.rowTheirs, !lastOfRun && { marginBottom: 0 }]}>
+          {!mine &&
+            (lastOfRun ? (
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() =>
+                  peer &&
+                  openUserProfile({
+                    id: peer.id,
+                    name: peer.name,
+                    avatarUrl: peer.avatarUrl ?? '',
+                    role: (peer.role ?? undefined) as any,
+                    badge: peer.role === 'Mentor' ? 'Verified Mentor' : 'Community Member',
+                  })
+                }
+                style={styles.msgAvatar}
+              >
+                <Avatar uri={peer?.avatarUrl} name={peer?.name ?? ''} size={28} />
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.msgAvatar} />
+            ))}
           <TouchableOpacity
             activeOpacity={item.failed ? 0.7 : 1}
             disabled={!item.failed}
-            onPress={() => send(item)}
-            style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs, item.failed && styles.bubbleFailed]}
+            onPress={() => send({ retry: item })}
+            style={[
+              styles.bubble,
+              mine ? styles.bubbleMine : styles.bubbleTheirs,
+              isMedia && styles.bubbleMedia,
+              item.failed && styles.bubbleFailed,
+            ]}
           >
-            <Text style={[styles.bubbleText, mine && styles.bubbleTextMine]}>{item.text}</Text>
+            {!!a && (
+              <MessageAttachment
+                messageId={item.id}
+                attachment={a}
+                mine={mine}
+                pending={item.pending}
+                audio={audioState}
+                onToggleAudio={() => toggleAudio(item)}
+                onOpenMedia={setViewerMedia}
+                onOpenFile={openFile}
+              />
+            )}
+            {!!item.text && (
+              <Text style={[styles.bubbleText, mine && styles.bubbleTextMine, !!a && styles.caption]}>{item.text}</Text>
+            )}
             <View style={styles.bubbleMeta}>
               <Text style={[styles.bubbleTime, mine && styles.bubbleTimeMine]}>
                 {new Date(item.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
@@ -534,17 +798,62 @@ export const ChatModal: React.FC = () => {
               />
             )}
 
-            <View style={[styles.composer, { paddingBottom: composerPad }]}>
-              <TextInput
-                value={text}
-                onChangeText={setText}
-                placeholder={`Message ${peer?.name.split(' ')[0] ?? ''}…`}
-                placeholderTextColor="#94A3B8"
-                style={styles.composerInput}
-                multiline
-                maxLength={2000}
-                editable={!!conv}
-              />
+            {showAttach && <AttachmentSheet onPick={pickAttachment} onClose={() => setShowAttach(false)} />}
+
+            <View style={[styles.composer, { paddingBottom: showEmoji ? 8 : composerPad }]}>
+              <View style={styles.inputWrap}>
+                <TouchableOpacity
+                  onPress={toggleEmoji}
+                  disabled={!conv}
+                  style={styles.inputIcon}
+                  accessibilityLabel={showEmoji ? 'Show keyboard' : 'Show emojis'}
+                >
+                  <Ionicons name={showEmoji ? 'keypad-outline' : 'happy-outline'} size={23} color="#64748B" />
+                </TouchableOpacity>
+                <TextInput
+                  ref={inputRef}
+                  value={text}
+                  onChangeText={setText}
+                  onSelectionChange={(e) => {
+                    selectionRef.current = e.nativeEvent.selection;
+                  }}
+                  onFocus={() => {
+                    setShowEmoji(false);
+                    setShowAttach(false);
+                  }}
+                  placeholder={`Message ${peer?.name.split(' ')[0] ?? ''}…`}
+                  placeholderTextColor="#94A3B8"
+                  style={styles.composerInput}
+                  multiline
+                  maxLength={2000}
+                  editable={!!conv}
+                />
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowEmoji(false);
+                    Keyboard.dismiss();
+                    setShowAttach((v) => !v);
+                  }}
+                  disabled={!conv}
+                  style={styles.inputIcon}
+                  accessibilityLabel="Attach a file"
+                >
+                  <Ionicons name="attach" size={24} color={showAttach ? ACCENT : '#64748B'} style={{ transform: [{ rotate: '45deg' }] }} />
+                </TouchableOpacity>
+                {!text.trim() && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      setShowAttach(false);
+                      void pickAttachment('camera');
+                    }}
+                    disabled={!conv}
+                    style={styles.inputIcon}
+                    accessibilityLabel="Camera"
+                  >
+                    <Ionicons name="camera-outline" size={22} color="#64748B" />
+                  </TouchableOpacity>
+                )}
+              </View>
               <TouchableOpacity
                 activeOpacity={0.85}
                 onPress={() => send()}
@@ -554,6 +863,14 @@ export const ChatModal: React.FC = () => {
                 <Ionicons name="send" size={18} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
+
+            {showEmoji && (
+              <View style={{ paddingBottom: Math.max(insets.bottom, 0) }}>
+                <EmojiPanel onPick={insertEmoji} onBackspace={backspace} />
+              </View>
+            )}
+
+            <ChatMediaViewer media={viewerMedia} onClose={() => setViewerMedia(null)} />
           </>
         )}
       </KeyboardAvoidingView>
@@ -621,6 +938,9 @@ const styles = StyleSheet.create({
   bubbleMine: { backgroundColor: ACCENT, borderBottomRightRadius: 5 },
   bubbleTheirs: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0', borderBottomLeftRadius: 5 },
   bubbleFailed: { backgroundColor: '#DC2626' },
+  bubbleMedia: { paddingHorizontal: 4, paddingTop: 4 },
+  caption: { paddingHorizontal: 6, paddingTop: 6 },
+  msgAvatar: { width: 28, marginRight: 6, alignSelf: 'flex-end' },
   bubbleText: { fontSize: 15, color: '#0F172A', lineHeight: 20 },
   bubbleTextMine: { color: '#FFFFFF' },
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: 2 },
@@ -639,13 +959,20 @@ const styles = StyleSheet.create({
     borderTopColor: '#F1F5F9',
     backgroundColor: '#FFFFFF',
   },
+  inputWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 22,
+    paddingHorizontal: 4,
+  },
+  inputIcon: { width: 38, height: 42, alignItems: 'center', justifyContent: 'center' },
   composerInput: {
     flex: 1,
     maxHeight: 120,
     minHeight: 42,
-    backgroundColor: '#F1F5F9',
-    borderRadius: 21,
-    paddingHorizontal: 16,
+    paddingHorizontal: 4,
     paddingTop: 11,
     paddingBottom: 11,
     fontSize: 15,

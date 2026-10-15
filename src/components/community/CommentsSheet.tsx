@@ -217,7 +217,7 @@ export const CommentsSheet: React.FC<CommentsSheetProps> = ({ visible, post: pos
                       color={active ? '#FFFFFF' : k === 'mentor' ? '#7C3AED' : '#4F46E5'}
                     />
                     <Text style={[styles.postingAsText, active && styles.postingAsTextActive]}>
-                      {k === 'mentor' ? `${post.authorSkill || ''} Mentor`.trim() : 'General'}
+                      {k === 'mentor' ? 'Mentor' : 'General'}
                     </Text>
                   </TouchableOpacity>
                 );

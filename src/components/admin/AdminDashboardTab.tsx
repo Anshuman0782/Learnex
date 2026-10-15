@@ -40,17 +40,41 @@ export const AdminDashboardTab: React.FC<{ data: AdminDashboard }> = ({ data }) 
         <TileGrid>
           <StatTile label="Total users" value={data.users.total} icon="people" hint={`+${data.users.newLast30Days} in 30 days`} />
           <StatTile label="New this week" value={data.users.newLast7Days} icon="person-add" color="#16A34A" />
-          <StatTile label="Learners" value={data.users.learners} icon="school" color="#4F46E5" />
-          <StatTile label="Mentors" value={data.users.mentors} icon="ribbon" color="#7C3AED" />
+          <StatTile label="Learners" value={data.users.learners} icon="school" color="#4F46E5" hint="people learning ≥1 skill" />
+          <StatTile label="Mentors" value={data.users.mentors} icon="ribbon" color="#7C3AED" hint="people mentoring ≥1 skill" />
+          <StatTile label="Learner + Mentor" value={data.users.both ?? 0} icon="git-compare" color="#0891B2" hint="in different skills" />
           <StatTile label="Guests" value={data.users.guests ?? 0} icon="person-outline" color="#64748B" />
         </TileGrid>
+        <Text style={styles.note}>
+          Roles are per skill. Someone who is a Learner in Music and a Mentor in Marketing is counted under both
+          Learners and Mentors (and in “Learner + Mentor”) — but only once in Total users.
+        </Text>
         <Text style={styles.chartTitle}>New sign-ups per day (last 30 days)</Text>
         <BarChart data={growthChart} color="#16A34A" />
         <Text style={styles.chartTitle}>Total users (cumulative)</Text>
         <BarChart data={totalChart} color="#4F46E5" height={80} />
+        {data.users.members !== undefined && <Row label="Learner / Mentor accounts" value={data.users.members} />}
         <Row label="Still onboarding (no role yet)" value={data.users.onboarding} />
         <Row label="Admins" value={data.users.admins} />
       </Section>
+
+      {/* Skills */}
+      {(data.users.skills?.length ?? 0) > 0 && (
+        <Section title="Skills" subtitle="Learners and mentors in each skill" icon="layers">
+          <View style={styles.skillHead}>
+            <Text style={[styles.skillCell, styles.skillName, styles.skillHeadText]}>Skill</Text>
+            <Text style={[styles.skillCell, styles.skillHeadText]}>Learners</Text>
+            <Text style={[styles.skillCell, styles.skillHeadText]}>Mentors</Text>
+          </View>
+          {data.users.skills!.map((s) => (
+            <View key={s.skill} style={styles.skillRow}>
+              <Text style={[styles.skillCell, styles.skillName]} numberOfLines={1}>{s.skill}</Text>
+              <Text style={[styles.skillCell, { color: '#4F46E5' }]}>{s.learners}</Text>
+              <Text style={[styles.skillCell, { color: '#7C3AED' }]}>{s.mentors}</Text>
+            </View>
+          ))}
+        </Section>
+      )}
 
       {/* Engagement / time spent */}
       <Section title="Time spent in the app" subtitle="Measured from foreground app time" icon="time">
@@ -166,6 +190,12 @@ export const AdminDashboardTab: React.FC<{ data: AdminDashboard }> = ({ data }) 
 };
 
 const styles = StyleSheet.create({
+  note: { fontSize: 11, color: '#64748B', lineHeight: 16, marginTop: 8 },
+  skillHead: { flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
+  skillHeadText: { fontSize: 11, fontWeight: '800', color: '#64748B', textTransform: 'uppercase' },
+  skillRow: { flexDirection: 'row', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  skillCell: { width: 76, textAlign: 'right', fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  skillName: { flex: 1, width: undefined, textAlign: 'left' },
   wrap: { gap: 12 },
   updated: { fontSize: 11, color: '#94A3B8', textAlign: 'center' },
   chartTitle: { fontSize: 12, fontWeight: '700', color: '#334155', marginTop: 4 },

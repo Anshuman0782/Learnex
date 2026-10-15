@@ -220,3 +220,123 @@ export async function generateVideoThumbnail(videoUri: string): Promise<string |
     return null;
   }
 }
+
+// ---------------- Chat attachments ----------------
+
+export type ChatAttachmentKind = 'image' | 'video' | 'audio' | 'file';
+
+export type PickedAttachment = {
+  uri: string;
+  mimeType: string;
+  type: ChatAttachmentKind;
+  name: string;
+  size?: number;
+  durationMs?: number;
+};
+
+export type AttachmentResult =
+  | { status: 'ok'; file: PickedAttachment }
+  | { status: 'cancelled' }
+  | { status: 'denied' }
+  | { status: 'error'; message: string };
+
+/** Upload limits (mirror the server's). */
+export const CHAT_LIMIT_BYTES: Record<ChatAttachmentKind, number> = {
+  image: 8 * 1024 * 1024,
+  video: 100 * 1024 * 1024,
+  audio: 30 * 1024 * 1024,
+  file: 20 * 1024 * 1024,
+};
+
+/** Document types the server accepts for chat. */
+const CHAT_DOC_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain',
+  'text/csv',
+  'application/zip',
+];
+
+const DOC_MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  txt: 'text/plain',
+  csv: 'text/csv',
+  zip: 'application/zip',
+};
+
+function fromImagePickerAsset(a: ImagePicker.ImagePickerAsset): PickedAttachment {
+  const isVideo = a.type === 'video' || (a.mimeType ?? '').startsWith('video/');
+  const mimeType = isVideo ? videoMime(a) : imageMime(a);
+  const ext = isVideo ? (mimeType === 'video/quicktime' ? 'mov' : 'mp4') : mimeType === 'image/png' ? 'png' : 'jpg';
+  return {
+    uri: a.uri,
+    mimeType,
+    type: isVideo ? 'video' : 'image',
+    name: a.fileName || `${isVideo ? 'video' : 'photo'}-${Date.now()}.${ext}`,
+    size: a.fileSize ?? undefined,
+    durationMs: isVideo ? a.duration ?? undefined : undefined,
+  };
+}
+
+/** Photo or video from the gallery, for a chat message. */
+export async function pickChatMedia(): Promise<AttachmentResult> {
+  const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (!perm.granted) return { status: 'denied' };
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images', 'videos'],
+    quality: 0.8,
+  });
+  if (result.canceled || result.assets.length === 0) return { status: 'cancelled' };
+  return { status: 'ok', file: fromImagePickerAsset(result.assets[0]) };
+}
+
+/** Take a photo (or record a video) with the camera, for a chat message. */
+export async function captureChatMedia(): Promise<AttachmentResult> {
+  const perm = await ImagePicker.requestCameraPermissionsAsync();
+  if (!perm.granted) return { status: 'denied' };
+  const result = await ImagePicker.launchCameraAsync({
+    mediaTypes: ['images', 'videos'],
+    videoMaxDuration: 180,
+    quality: 0.8,
+  });
+  if (result.canceled || result.assets.length === 0) return { status: 'cancelled' };
+  return { status: 'ok', file: fromImagePickerAsset(result.assets[0]) };
+}
+
+/** A document (PDF, Word, Excel, PowerPoint, text, zip) for a chat message. */
+export async function pickChatDocument(): Promise<AttachmentResult> {
+  const result = await DocumentPicker.getDocumentAsync({
+    type: CHAT_DOC_TYPES,
+    copyToCacheDirectory: false,
+    multiple: false,
+  });
+  if (result.canceled || !result.assets || result.assets.length === 0) return { status: 'cancelled' };
+  const a = result.assets[0];
+  const ext = (a.name?.split('.').pop() || '').toLowerCase();
+  const mimeType = a.mimeType && CHAT_DOC_TYPES.includes(a.mimeType) ? a.mimeType : DOC_MIME_BY_EXT[ext];
+  if (!mimeType) return { status: 'error', message: 'This file type can’t be sent. Try a PDF, Word, Excel, PowerPoint, text or zip file.' };
+  const uri = await persistPick(a.uri, ext || 'bin');
+  return {
+    status: 'ok',
+    file: { uri, mimeType, type: 'file', name: a.name || `document.${ext || 'bin'}`, size: a.size ?? undefined },
+  };
+}
+
+/** An audio file (voice note / song) for a chat message. */
+export async function pickChatAudio(): Promise<AttachmentResult> {
+  const r = await pickAudioFile();
+  if (r.status !== 'ok') return r;
+  const ext = r.uri.split('.').pop() || 'm4a';
+  return { status: 'ok', file: { uri: r.uri, mimeType: r.mimeType, type: 'audio', name: `audio-${Date.now()}.${ext}` } };
+}

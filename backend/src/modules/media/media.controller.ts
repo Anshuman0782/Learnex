@@ -17,7 +17,7 @@ export interface UploadResponse {
   path: string;
   mimeType: string;
   size: number;
-  kind: 'image' | 'video' | 'audio';
+  kind: 'image' | 'video' | 'audio' | 'file';
 }
 
 @Controller('media')

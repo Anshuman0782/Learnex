@@ -14,6 +14,10 @@ import { RealtimeGateway } from '../realtime/realtime.gateway.js';
 const roleLabel = (r: UserRole | null) =>
   r === UserRole.MENTOR ? 'Mentor' : r === UserRole.LEARNER ? 'Learner' : r === UserRole.GUEST ? 'Guest' : null;
 
+/** Each skill with the role held in it, e.g. [{ skill: 'Music', role: 'Learner' }]. */
+const skillList = (rows: { skill: string; role: UserRole }[]) =>
+  rows.map((s) => ({ skill: s.skill, role: s.role === UserRole.MENTOR ? ('Mentor' as const) : ('Learner' as const) }));
+
 /**
  * Who can use the Admin Panel. Owners come from ADMIN_EMAILS: they're always
  * admins and can't be revoked (so the app can never be locked out). Any admin
@@ -67,6 +71,7 @@ export class AdminAccessService implements OnModuleInit {
         email: true,
         avatarUrl: true,
         role: true,
+        skills: { select: { skill: true, role: true }, orderBy: { createdAt: 'asc' as const } },
         adminGrantedAt: true,
         adminGrantedById: true,
       },
@@ -84,6 +89,7 @@ export class AdminAccessService implements OnModuleInit {
       email: a.email,
       avatarUrl: a.avatarUrl ?? '',
       role: roleLabel(a.role),
+      skills: skillList(a.skills),
       isOwner: this.isOwnerEmail(a.email),
       grantedAt: a.adminGrantedAt?.toISOString() ?? null,
       grantedByName: a.adminGrantedById ? granterName.get(a.adminGrantedById) ?? null : null,
@@ -102,7 +108,10 @@ export class AdminAccessService implements OnModuleInit {
           { email: { contains: query, mode: 'insensitive' } },
         ],
       },
-      select: { id: true, name: true, email: true, avatarUrl: true, role: true, isAdmin: true },
+      select: {
+        id: true, name: true, email: true, avatarUrl: true, role: true, isAdmin: true,
+        skills: { select: { skill: true, role: true }, orderBy: { createdAt: 'asc' as const } },
+      },
       orderBy: { name: 'asc' },
       take: 20,
     });
@@ -112,6 +121,7 @@ export class AdminAccessService implements OnModuleInit {
       email: u.email,
       avatarUrl: u.avatarUrl ?? '',
       role: roleLabel(u.role),
+      skills: skillList(u.skills),
       isAdmin: u.isAdmin,
       isOwner: this.isOwnerEmail(u.email),
     }));

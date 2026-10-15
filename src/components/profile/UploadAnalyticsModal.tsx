@@ -28,7 +28,7 @@ export const UploadAnalyticsModal: React.FC<Props> = ({ post, onClose, onDelete,
     { label: 'Views', value: post.viewsCount ?? 0, icon: 'eye', color: '#0EA5E9' },
     { label: 'Likes', value: post.likesCount ?? 0, icon: 'heart', color: '#EF4444' },
     { label: 'Comments', value: general, icon: 'chatbubble', color: '#4F46E5' },
-    { label: 'Mentor Critiques', value: mentor, icon: 'star', color: '#7C3AED' },
+    { label: 'Mentor comments', value: mentor, icon: 'star', color: '#7C3AED' },
     { label: 'Reposts', value: post.repostsCount ?? 0, icon: 'repeat', color: '#16A34A' },
     { label: 'Total Comments', value: post.commentsCount ?? general + mentor, icon: 'chatbubbles', color: '#0891B2' },
   ];

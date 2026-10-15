@@ -2,12 +2,25 @@ import { apiRequest } from './client';
 
 // ---------- Access ----------
 
+/** A skill the member has joined and their role in it. */
+export interface AdminSkillRole {
+  skill: string;
+  role: 'Learner' | 'Mentor';
+}
+
+/** "Music · Learner, Marketing · Mentor" — or the account role if no skills. */
+export function skillsLine(u: { skills?: AdminSkillRole[]; role: string | null }): string {
+  if (u.skills && u.skills.length > 0) return u.skills.map((s) => `${s.skill} · ${s.role}`).join(', ');
+  return u.role ?? '';
+}
+
 export interface AdminAccount {
   id: string;
   name: string;
   email: string;
   avatarUrl: string;
   role: 'Learner' | 'Mentor' | 'Guest' | null;
+  skills?: AdminSkillRole[];
   isOwner: boolean;
   grantedAt: string | null;
   grantedByName: string | null;
@@ -19,6 +32,7 @@ export interface AdminUserResult {
   email: string;
   avatarUrl: string;
   role: 'Learner' | 'Mentor' | 'Guest' | null;
+  skills?: AdminSkillRole[];
   isAdmin: boolean;
   isOwner: boolean;
 }
@@ -52,7 +66,13 @@ export interface AdminDashboard {
     mentors: number;
     /** Guests: full access, no XP, never ranked. */
     guests: number;
+    /** People who are a Learner in one skill AND a Mentor in another. */
+    both?: number;
+    /** People with a Learner/Mentor account (each counted once). */
+    members?: number;
     onboarding: number;
+    /** Learners and mentors in each skill. */
+    skills?: Array<{ skill: string; learners: number; mentors: number }>;
     admins: number;
     newLast7Days: number;
     newLast30Days: number;

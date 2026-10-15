@@ -1,14 +1,52 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
-import { IsString, MaxLength, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import type { AuthenticatedUser } from '../auth/types/authenticated-user.type.js';
 import { ChatService } from './chat.service.js';
 
-class SendMessageDto {
+class AttachmentDto {
   @IsString()
-  @MinLength(1)
+  @MaxLength(2048)
+  url!: string;
+
+  @IsIn(['image', 'video', 'audio', 'file'])
+  type!: 'image' | 'video' | 'audio' | 'file';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  mime?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(200 * 1024 * 1024)
+  size?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(6 * 60 * 60 * 1000)
+  durationMs?: number;
+}
+
+class SendMessageDto {
+  /** Text, or a caption for the attachment. One of the two is required. */
+  @IsOptional()
+  @IsString()
   @MaxLength(2000)
-  text!: string;
+  text?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => AttachmentDto)
+  attachment?: AttachmentDto;
 }
 
 @Controller('chats')
@@ -45,7 +83,7 @@ export class ChatController {
 
   @Post(':id/messages')
   send(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string, @Body() dto: SendMessageDto) {
-    return this.chat.send(user.userId, id, dto.text);
+    return this.chat.send(user.userId, id, dto.text ?? '', dto.attachment);
   }
 
   @HttpCode(HttpStatus.OK)

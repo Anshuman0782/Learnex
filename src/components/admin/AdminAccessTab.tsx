@@ -9,8 +9,7 @@ import {
   revokeAdminRequest,
   searchAdminUsersRequest,
   type AdminAccount,
-  type AdminUserResult,
-} from '../../api/admin.api';
+  type AdminUserResult, skillsLine } from '../../api/admin.api';
 import { ADMIN_ACCENT, Badge, EmptyState, Field, Section, errorMessage, isForbidden } from './adminUi';
 
 const formatDate = (iso: string | null) =>
@@ -126,6 +125,7 @@ export const AdminAccessTab: React.FC<{ onForbidden: () => void }> = ({ onForbid
                     {isMe && <Badge text="You" color="#0F766E" bg="#CCFBF1" />}
                   </View>
                   <Text style={styles.email} numberOfLines={1}>{a.email}</Text>
+                  {!!skillsLine(a) && <Text style={styles.meta} numberOfLines={2}>{skillsLine(a)}</Text>}
                   <Text style={styles.meta}>
                     {a.isOwner ? 'Owner account' : `Added ${formatDate(a.grantedAt)}${a.grantedByName ? ` by ${a.grantedByName}` : ''}`}
                   </Text>
@@ -169,7 +169,10 @@ export const AdminAccessTab: React.FC<{ onForbidden: () => void }> = ({ onForbid
               <View style={styles.personInfo}>
                 <Text style={styles.name} numberOfLines={1}>{u.name}</Text>
                 <Text style={styles.email} numberOfLines={1}>
-                  {u.email}{u.role ? ` · ${u.role}` : ''}
+                  {u.email}
+                </Text>
+                <Text style={styles.meta} numberOfLines={2}>
+                  {skillsLine(u) || 'No role yet'}
                 </Text>
               </View>
               {u.isAdmin ? (

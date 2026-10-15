@@ -19,14 +19,29 @@ const AUDIO_TYPES = new Set([
   'audio/webm',
   'audio/ogg',
 ]);
+/** Documents that can be shared in chat (WhatsApp-style attachments). */
+const FILE_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain',
+  'text/csv',
+  'application/zip',
+  'application/x-zip-compressed',
+]);
 const IMAGE_MAX_BYTES = 8 * 1024 * 1024; // 8 MB
+const FILE_MAX_BYTES = 20 * 1024 * 1024; // 20 MB
 const VIDEO_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 const AUDIO_MAX_BYTES = 30 * 1024 * 1024; // 30 MB
 
 export interface UploadedResult extends StoredFile {
   mimeType: string;
   size: number;
-  kind: 'image' | 'video' | 'audio';
+  kind: 'image' | 'video' | 'audio' | 'file';
 }
 
 @Injectable()
@@ -39,7 +54,7 @@ export class MediaService {
       throw new BadRequestException('No file provided');
     }
 
-    let kind: 'image' | 'video' | 'audio';
+    let kind: 'image' | 'video' | 'audio' | 'file';
     let subdir: string;
     let maxBytes: number;
 
@@ -55,6 +70,10 @@ export class MediaService {
       kind = 'audio';
       subdir = 'audio';
       maxBytes = AUDIO_MAX_BYTES;
+    } else if (FILE_TYPES.has(file.mimetype)) {
+      kind = 'file';
+      subdir = 'files';
+      maxBytes = FILE_MAX_BYTES;
     } else {
       throw new BadRequestException(`Unsupported file type: ${file.mimetype}`);
     }

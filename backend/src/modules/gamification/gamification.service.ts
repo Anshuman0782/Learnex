@@ -494,6 +494,12 @@ export class GamificationService {
     });
 
     const rules = new Map((await this.xp.getRules()).map((x) => [x.key, x]));
+    // Display names for the skill keys stored on each XP row.
+    const mySkills = await this.prisma.userSkill.findMany({
+      where: { userId },
+      select: { skill: true, skillKey: true },
+    });
+    const skillName = new Map(mySkills.map((s) => [s.skillKey, s.skill]));
 
     return rows.map((r) => {
       let label = SOURCE_LABEL[r.source];
@@ -517,6 +523,9 @@ export class GamificationService {
         amount: r.amount,
         createdAt: r.createdAt.toISOString(),
         thisSeason: r.createdAt >= startsAt,
+        // The skill it was earned in and the role held there ('Learner' | 'Mentor').
+        skill: r.skill ? skillName.get(r.skill) ?? r.skill.replace(/\b\w/g, (c) => c.toUpperCase()) : null,
+        role: r.role === 'Mentor' || r.role === 'Learner' ? r.role : null,
       };
     });
   }

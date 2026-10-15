@@ -45,10 +45,16 @@ export class AdminStatsService {
     const liveUser: Prisma.UserWhereInput = { deletedAt: null };
 
     // ---- Users ----
-    const [totalUsers, learners, mentors, guests, admins, usersBefore30, recentUsers] = await Promise.all([
+    // One person can be a Learner in one skill and a Mentor in another, so the
+    // role counts are PEOPLE holding at least one skill in that role (a person
+    // with both is in both counts, and in `both`). Total users is never doubled.
+    const hasRole = (role: UserRole): Prisma.UserWhereInput => ({
+      OR: [{ skills: { some: { role } } }, { role, skills: { none: {} } }],
+    });
+    const [totalUsers, learners, mentors, guests, admins, usersBefore30, recentUsers, both, skillRows] = await Promise.all([
       this.prisma.user.count({ where: liveUser }),
-      this.prisma.user.count({ where: { ...liveUser, role: UserRole.LEARNER } }),
-      this.prisma.user.count({ where: { ...liveUser, role: UserRole.MENTOR } }),
+      this.prisma.user.count({ where: { ...liveUser, ...hasRole(UserRole.LEARNER) } }),
+      this.prisma.user.count({ where: { ...liveUser, ...hasRole(UserRole.MENTOR) } }),
       this.prisma.user.count({ where: { ...liveUser, role: UserRole.GUEST } }),
       this.prisma.user.count({ where: { ...liveUser, isAdmin: true } }),
       this.prisma.user.count({ where: { ...liveUser, createdAt: { lt: start30 } } }),
@@ -56,7 +62,45 @@ export class AdminStatsService {
         where: { ...liveUser, createdAt: { gte: start30 } },
         select: { createdAt: true },
       }),
+      this.prisma.user.count({
+        where: {
+          ...liveUser,
+          AND: [
+            { skills: { some: { role: UserRole.LEARNER } } },
+            { skills: { some: { role: UserRole.MENTOR } } },
+          ],
+        },
+      }),
+      this.prisma.userSkill.groupBy({
+        by: ['skillKey', 'role'],
+        where: { user: liveUser },
+        _count: { _all: true },
+      }),
     ]);
+    // People who finished onboarding (have a Learner/Mentor role or a skill).
+    const members = await this.prisma.user.count({
+      where: {
+        ...liveUser,
+        OR: [{ role: { in: [UserRole.LEARNER, UserRole.MENTOR] } }, { skills: { some: {} } }],
+      },
+    });
+    // Per-skill breakdown: learners and mentors in each skill.
+    const labels = await this.prisma.userSkill.findMany({
+      where: { skillKey: { in: [...new Set(skillRows.map((r) => r.skillKey))] } },
+      distinct: ['skillKey'],
+      select: { skillKey: true, skill: true },
+    });
+    const labelOf = new Map(labels.map((l) => [l.skillKey, l.skill]));
+    const bySkill = new Map<string, { skill: string; learners: number; mentors: number }>();
+    for (const r of skillRows) {
+      const row = bySkill.get(r.skillKey) ?? { skill: labelOf.get(r.skillKey) ?? r.skillKey, learners: 0, mentors: 0 };
+      if (r.role === UserRole.MENTOR) row.mentors += r._count._all;
+      else row.learners += r._count._all;
+      bySkill.set(r.skillKey, row);
+    }
+    const skills = [...bySkill.values()].sort(
+      (a, b) => b.learners + b.mentors - (a.learners + a.mentors) || a.skill.localeCompare(b.skill),
+    );
     const signupsByDay = new Map(days30.map((d) => [d, 0]));
     for (const u of recentUsers) {
       const d = utcDay(u.createdAt);
@@ -195,8 +239,12 @@ export class AdminStatsService {
         total: totalUsers,
         learners,
         mentors,
+        /** People who are a Learner in one skill and a Mentor in another. */
+        both,
+        members,
         guests,
-        onboarding: totalUsers - learners - mentors - guests,
+        onboarding: Math.max(0, totalUsers - members - guests),
+        skills,
         admins,
         newLast7Days: growth.slice(-7).reduce((s, g) => s + g.signups, 0),
         newLast30Days: growth.reduce((s, g) => s + g.signups, 0),

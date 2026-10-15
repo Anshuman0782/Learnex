@@ -28,7 +28,8 @@ export class LocalStorageDriver implements StorageDriver {
   }
 
   async save({ buffer, originalName, mimeType, subdir }: SaveInput): Promise<StoredFile> {
-    const ext = EXT_BY_MIME[mimeType] ?? path.extname(originalName).toLowerCase() ?? '';
+    // Only a short alphanumeric extension from the client's name is trusted.
+    const ext = EXT_BY_MIME[mimeType] ?? (/^\.[a-z0-9]{1,5}$/.exec(path.extname(originalName).toLowerCase())?.[0] ?? '');
     const filename = `${randomUUID()}${ext}`;
     const dir = path.join(this.root, subdir);
     await fs.mkdir(dir, { recursive: true });

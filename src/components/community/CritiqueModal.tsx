@@ -473,7 +473,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
             {/* 6. Comments & Critiques Section */}
             <View style={styles.commentsSectionHeader}>
               <Text style={styles.commentsTitle}>
-                Comments & Critiques ({post.comments?.length || 0})
+                Comments ({post.comments?.length || 0})
               </Text>
             </View>
 
@@ -500,7 +500,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                   color={commentTypeTab === 'mentor' ? '#7C3AED' : '#64748B'}
                 />
                 <Text style={[styles.filterTabText, commentTypeTab === 'mentor' && styles.filterTabTextActiveMentor]}>
-                  Mentor Critiques ({mentorCritiques.length})
+                  Mentor ({mentorCritiques.length})
                 </Text>
               </TouchableOpacity>
 
@@ -540,7 +540,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                           <View style={styles.mentorCritiqueBannerLeft}>
                             <Ionicons name="checkmark-circle" size={13} color="#7C3AED" />
                             <Text style={styles.mentorCritiqueBannerText}>
-                              VERIFIED MENTOR CRITIQUE
+                              MENTOR
                             </Text>
                           </View>
                           {comment.mentorRating && (
@@ -699,7 +699,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                       composeType === 'general' && styles.composeTypeBtnTextActive,
                     ]}
                   >
-                    General Comment
+                    General
                   </Text>
                 </TouchableOpacity>
 
@@ -719,7 +719,7 @@ export const CritiqueModal: React.FC<CritiqueModalProps> = ({
                       composeType === 'mentor' && styles.composeTypeBtnTextActive,
                     ]}
                   >
-                    Mentor Critique
+                    Mentor
                   </Text>
                 </TouchableOpacity>
               </View>
