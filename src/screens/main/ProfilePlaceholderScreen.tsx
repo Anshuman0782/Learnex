@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { GuestUpgradeBanner } from '../../components/common/GuestUpgradeBanner';
 import { MySkillsCard } from '../../components/profile/MySkillsCard';
+import { AiProgressCard } from '../../components/profile/AiProgressCard';
 import { useApp } from '../../context/AppContext';
 import { Avatar, ConfirmModal } from '../../components/common';
 import { EditProfileModal } from '../../components/profile/EditProfileModal';
@@ -409,6 +410,9 @@ export const ProfilePlaceholderScreen: React.FC<ProfilePlaceholderScreenProps> =
 
               {/* Every skill + role, and "Add skill" (members only) */}
               <MySkillsCard onBeforeNavigate={closeMyProfile} />
+
+              {/* AI Progress per AI-judged skill (only the owner sees it) */}
+              {(selectedRole === 'Learner' || selectedRole === 'Mentor') && <AiProgressCard />}
 
               {/* Focus pill — guests only (members see their skills card above) */}
               {selectedRole === 'Guest' && !!selectedHobby && (

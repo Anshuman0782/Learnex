@@ -8,7 +8,7 @@ import { UserRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { RealtimeGateway } from '../realtime/realtime.gateway.js';
 import { PushService } from '../push/push.service.js';
-import { CLOUD_FOLDER, parseCloudinaryUrl } from '../media/storage/cloudinary-storage.driver.js';
+import { isOwnUpload } from '../../common/utils/own-upload.js';
 
 const PAGE_SIZE = 30;
 
@@ -99,21 +99,6 @@ const toMessage = (m: {
   createdAt: m.createdAt.toISOString(),
   readAt: m.readAt?.toISOString() ?? null,
 });
-
-/**
- * Attachments must be files uploaded to LERNEX's own storage (our Cloudinary
- * folder in production, our /uploads folder in local development) — never an
- * arbitrary link.
- */
-function isOwnUpload(url: string): boolean {
-  const cloud = parseCloudinaryUrl(process.env.CLOUDINARY_URL)?.cloudName;
-  if (cloud) {
-    return new RegExp(
-      `^https://res\\.cloudinary\\.com/${cloud}/(image|video|raw)/upload/[A-Za-z0-9._\\-/]*${CLOUD_FOLDER}/(images|videos|audio|files)/[A-Za-z0-9._\\-]+$`,
-    ).test(url);
-  }
-  return /^https?:\/\/[^\s/]+\/uploads\/(images|videos|audio|files)\/[A-Za-z0-9._-]+$/.test(url);
-}
 
 /**
  * Private 1:1 messaging. Only the two participants can read or write a

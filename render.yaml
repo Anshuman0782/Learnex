@@ -42,3 +42,7 @@ services:
       #   MAIL_FROM_EMAIL  — the sender email you verified in Brevo
       #   MAIL_FROM_NAME   — e.g. LERNEX
       # Optional later (Environment tab): TURN_URL, TURN_USERNAME, TURN_CREDENTIAL
+      # AI (optional, free tiers — see docs/AI_SETUP.md). Without them the app
+      # works normally; AI reviews wait and mentor tests go to admin review.
+      #   GEMINI_API_KEY   — Google AI Studio → Get API key (no card)
+      #   GROQ_API_KEY     — console.groq.com → API Keys (no card)

@@ -20,9 +20,10 @@ import { AdminAccessTab } from './AdminAccessTab';
 import { AdminXpRulesTab } from './AdminXpRulesTab';
 import { AdminRewardsTab } from './AdminRewardsTab';
 import { AdminNotifyTab } from './AdminNotifyTab';
+import { AdminAiTab } from './AdminAiTab';
 import { ADMIN_ACCENT, errorMessage, isForbidden } from './adminUi';
 
-type AdminTab = 'dashboard' | 'access' | 'xp' | 'rewards' | 'notify';
+type AdminTab = 'dashboard' | 'access' | 'xp' | 'rewards' | 'notify' | 'ai';
 
 const TABS: Array<{ key: AdminTab; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
   { key: 'dashboard', label: 'Dashboard', icon: 'stats-chart' },
@@ -30,6 +31,7 @@ const TABS: Array<{ key: AdminTab; label: string; icon: keyof typeof Ionicons.gl
   { key: 'xp', label: 'XP Rules', icon: 'flash' },
   { key: 'rewards', label: 'Rewards', icon: 'gift' },
   { key: 'notify', label: 'Notify', icon: 'megaphone' },
+  { key: 'ai', label: 'AI', icon: 'sparkles' },
 ];
 
 /**
@@ -114,7 +116,7 @@ export const AdminPanelModal: React.FC<{ visible: boolean; onClose: () => void }
               <Text style={styles.roleBadgeText}>{isOwner ? 'Owner' : 'Admin'}</Text>
             </View>
           </View>
-          <View style={styles.tabs}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
             {TABS.map((t) => {
               const active = tab === t.key;
               return (
@@ -124,7 +126,7 @@ export const AdminPanelModal: React.FC<{ visible: boolean; onClose: () => void }
                 </TouchableOpacity>
               );
             })}
-          </View>
+          </ScrollView>
         </LinearGradient>
 
         <ScrollView
@@ -151,6 +153,7 @@ export const AdminPanelModal: React.FC<{ visible: boolean; onClose: () => void }
           {tab === 'xp' && <AdminXpRulesTab onForbidden={lockOut} />}
           {tab === 'rewards' && <AdminRewardsTab onForbidden={lockOut} />}
           {tab === 'notify' && <AdminNotifyTab onForbidden={lockOut} />}
+          {tab === 'ai' && <AdminAiTab onForbidden={lockOut} />}
         </ScrollView>
       </View>
     </Modal>
@@ -181,8 +184,8 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   roleBadgeText: { fontSize: 11, fontWeight: '800', color: '#CCFBF1' },
-  tabs: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.18)', borderRadius: 14, padding: 3 },
-  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 8, borderRadius: 11 },
+  tabs: { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.18)', borderRadius: 14, padding: 3, flexGrow: 1 },
+  tab: { flexGrow: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 11 },
   tabActive: { backgroundColor: '#FFFFFF' },
   tabText: { fontSize: 11, fontWeight: '700', color: '#CCFBF1' },
   tabTextActive: { color: ADMIN_ACCENT, fontWeight: '800' },

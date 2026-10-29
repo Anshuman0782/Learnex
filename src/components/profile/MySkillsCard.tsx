@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useApp } from '../../context/AppContext';
+import { getMyMentorTestsRequest, type MentorApplication } from '../../api/ai.api';
 
 interface Props {
   /** Run before leaving the profile (e.g. close the sheet this card sits in). */
@@ -18,9 +19,15 @@ export const MySkillsCard: React.FC<Props> = ({ onBeforeNavigate }) => {
   const navigation = useNavigation<any>();
   const { selectedRole, mySkills, refreshSkills, setPrimarySkill, showDialog } = useApp();
 
+  // Latest mentor test per skill (to show "under review" / "retry after").
+  const [tests, setTests] = useState<MentorApplication[]>([]);
+
   useEffect(() => {
     void refreshSkills();
+    getMyMentorTestsRequest().then(setTests).catch(() => {});
   }, []);
+
+  const latestTest = (skill: string) => tests.find((t) => t.skillLabel.trim().toLowerCase() === skill.trim().toLowerCase());
 
   if (selectedRole !== 'Learner' && selectedRole !== 'Mentor') return null;
 
@@ -51,7 +58,7 @@ export const MySkillsCard: React.FC<Props> = ({ onBeforeNavigate }) => {
   const becomeMentor = (skill: string) =>
     showDialog({
       title: `Mentor in ${skill}`,
-      message: `Pass the 5-question test (4/5) to become a Mentor in ${skill}. Your other skills stay as they are.`,
+      message: `Pass the mentor test to become a Mentor in ${skill}. Your other skills stay as they are.`,
       icon: 'ribbon-outline',
       confirmText: 'Take test',
       cancelText: 'Not now',
@@ -94,11 +101,28 @@ export const MySkillsCard: React.FC<Props> = ({ onBeforeNavigate }) => {
               <Text style={styles.xpText}>
                 {s.xp.toLocaleString()} XP · {s.seasonXp.toLocaleString()} this season
               </Text>
-              {!mentor && (
-                <TouchableOpacity activeOpacity={0.7} onPress={() => becomeMentor(s.skill)} hitSlop={6}>
-                  <Text style={styles.mentorLink}>Become a Mentor in {s.skill}</Text>
-                </TouchableOpacity>
-              )}
+              {!mentor &&
+                (() => {
+                  const t = latestTest(s.skill);
+                  const waiting = t && (t.status === 'SUBMITTED' || t.status === 'REVIEW');
+                  const cooling = t?.status === 'FAILED' && t.retryAfter && new Date(t.retryAfter).getTime() > Date.now();
+                  if (waiting || cooling) {
+                    return (
+                      <TouchableOpacity activeOpacity={0.7} onPress={() => go('MentorTest', { skill: s.skill, addSkill: true })} hitSlop={6}>
+                        <Text style={[styles.mentorLink, { color: waiting ? '#D97706' : '#64748B' }]}>
+                          {waiting
+                            ? 'Mentor test is being reviewed'
+                            : `Mentor test: retry after ${new Date(t!.retryAfter!).toLocaleDateString([], { day: 'numeric', month: 'short' })}`}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  }
+                  return (
+                    <TouchableOpacity activeOpacity={0.7} onPress={() => becomeMentor(s.skill)} hitSlop={6}>
+                      <Text style={styles.mentorLink}>Become a Mentor in {s.skill}</Text>
+                    </TouchableOpacity>
+                  );
+                })()}
             </View>
             <View style={[styles.roleTag, mentor ? styles.roleMentor : styles.roleLearner]}>
               <Text style={[styles.roleText, mentor ? styles.roleTextMentor : styles.roleTextLearner]}>

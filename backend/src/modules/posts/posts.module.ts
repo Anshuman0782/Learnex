@@ -5,9 +5,10 @@ import { PostsService } from './posts.service.js';
 import { GamificationModule } from '../gamification/gamification.module.js';
 import { RealtimeModule } from '../realtime/realtime.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
+import { AiModule } from '../ai/ai.module.js';
 
 @Module({
-  imports: [GamificationModule, RealtimeModule, NotificationsModule],
+  imports: [GamificationModule, RealtimeModule, NotificationsModule, AiModule],
   controllers: [PostsController, CommentsController],
   providers: [PostsService],
 })

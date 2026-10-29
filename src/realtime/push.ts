@@ -16,7 +16,7 @@ export function isExpoGo(): boolean {
 
 /** What the server puts in a push's `data` so a tap can open the right screen. */
 export interface PushData {
-  kind?: 'call' | 'call_cancel' | 'chat' | 'post' | 'profile' | 'missed_call' | 'event' | 'circle' | 'announcement';
+  kind?: 'call' | 'call_cancel' | 'chat' | 'post' | 'profile' | 'missed_call' | 'event' | 'circle' | 'announcement' | 'mentor-test';
   callId?: string;
   callType?: 'voice' | 'video';
   fromUserId?: string;

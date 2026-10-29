@@ -20,6 +20,7 @@ import {
   type QuizQuestion,
   type QuizResultResponse,
 } from '../../api/onboarding.api';
+import { getMentorEligibilityRequest } from '../../api/ai.api';
 import { colors, typography, spacing, borderRadius, shadows } from '../../theme';
 
 type NavigationProp = NativeStackNavigationProp<AuthStackParamList, 'MentorQuiz'>;
@@ -31,7 +32,7 @@ export const MentorQuizScreen: React.FC = () => {
   // Set when the test is for one specific skill (added from the profile).
   const skill = route.params?.skill;
   const addingSkill = !!route.params?.addSkill;
-  const { enrollAsLearner, applyMentorSession, showDialog } = useApp();
+  const { enrollAsLearner, applyMentorSession, showDialog, user } = useApp();
 
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [passMark, setPassMark] = useState(4);
@@ -71,7 +72,26 @@ export const MentorQuizScreen: React.FC = () => {
   }, [skill]);
 
   useEffect(() => {
-    loadQuiz();
+    // Coding, Music and Spoken English use the AI mentor test instead of the quiz.
+    if (route.params?.forceQuiz) {
+      loadQuiz();
+      return;
+    }
+    let active = true;
+    const target = skill || user?.hobby || '';
+    getMentorEligibilityRequest(target)
+      .then((el) => {
+        if (!active) return;
+        if (el.mode === 'ai') navigation.replace('MentorTest', { skill: target, addSkill: addingSkill });
+        else loadQuiz();
+      })
+      .catch(() => {
+        if (active) loadQuiz(); // can't tell → the quiz still works
+      });
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadQuiz]);
 
   const handleSelectOption = (optionIndex: number) => {

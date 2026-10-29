@@ -10,6 +10,7 @@ import { timeAgo } from '../../common/utils/time-ago.js';
 import { XpService } from '../gamification/xp.service.js';
 import { RealtimeGateway } from '../realtime/realtime.gateway.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
+import { AiReviewService } from '../ai/ai-review.service.js';
 import { CLOUD_FOLDER, parseCloudinaryUrl } from '../media/storage/cloudinary-storage.driver.js';
 import { CreatePostDto, type PostTypeInput } from './dto/create-post.dto.js';
 import { AddCommentDto } from './dto/add-comment.dto.js';
@@ -38,6 +39,7 @@ export class PostsService {
     private readonly xp: XpService,
     private readonly realtime: RealtimeGateway,
     private readonly notifications: NotificationsService,
+    private readonly aiReviews: AiReviewService,
   ) {}
 
   // --- live updates -------------------------------------------------------
@@ -441,6 +443,9 @@ export class PostsService {
       },
       include: this.include(userId),
     });
+
+    // Learner Progress: queue an AI review in the background (never blocks or fails the post).
+    void this.aiReviews.onPostPublished(post);
 
     const scheduledFuture = !!post.scheduledAt && post.scheduledAt.getTime() > Date.now();
     // Award XP for public, published posts only (private/scheduled can't farm XP).

@@ -25,3 +25,13 @@ node test/e2e-scripts/guest-e2e.mjs
 
 Auth routes are rate-limited (5/min) by design â€” if a script reports 429s,
 wait a minute and re-run. Never point these at production.
+
+## AI (Stage 1)
+
+In `backend/test/ai/` (build first: `npx nest build`):
+
+| Script | Covers |
+|---|---|
+| `pitch-check.mjs` | Our own pitch analyser on generated tones (no server needed) |
+| `ai-e2e.mjs` | Progress + mentor test flows against a FAKE Gemini/Groq it starts on port 4555 — start the API with `GEMINI_API_KEY=test-gemini GEMINI_BASE_URL=http://127.0.0.1:4555 GROQ_API_KEY=test-groq GROQ_BASE_URL=http://127.0.0.1:4555 AI_MIN_GAP_MS=50 PORT=3001 node dist/main` |
+| `no-ai-e2e.mjs` | The app with NO AI keys (start the API normally) |

@@ -119,7 +119,7 @@ export type ChatView = { mode: 'inbox' } | { mode: 'thread'; peer: ChatPeer };
 import { deleteCommentRequest, editCommentRequest } from '../api/social.api';
 import { NotificationsModal } from '../components/common/NotificationsModal';
 import { saveTokens, clearTokens, getAccessToken, saveCachedUser, getCachedUser } from '../services/tokenStorage';
-import { setOnAuthFailure } from '../api/client';
+import { setOnAuthFailure, refreshSession } from '../api/client';
 /** Placeholder until the server's season loads: the real current month (UTC). */
 function currentMonthSeason(): SeasonCycleInfo {
   const now = new Date();
@@ -1185,6 +1185,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             };
           })
         );
+      });
+
+      // Mentor test decided → my roles may have changed: refresh skills, profile and token.
+      sock.on('mentor-test:updated', (p: { status: string }) => {
+        if (p.status !== 'PASSED') return;
+        void refreshSkills();
+        void refreshSession().then(() => meRequest().then((me) => applySession(me)).catch(() => {}));
       });
 
       // A live in-app notification for us.

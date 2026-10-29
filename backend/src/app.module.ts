@@ -27,6 +27,7 @@ import { ReportsModule } from './modules/reports/reports.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
 import { UsageModule } from './modules/usage/usage.module.js';
 import { ChatModule } from './modules/chat/chat.module.js';
+import { AiModule } from './modules/ai/ai.module.js';
 import { JwtAccessGuard } from './modules/auth/guards/jwt-access.guard.js';
 import { RolesGuard } from './common/guards/roles.guard.js';
 
@@ -65,6 +66,7 @@ import { RolesGuard } from './common/guards/roles.guard.js';
     AdminModule,
     UsageModule,
     ChatModule,
+    AiModule,
   ],
   providers: [
     // Order matters: rate limit, then authenticate, then authorize by role.

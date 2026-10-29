@@ -85,6 +85,50 @@ class EnvironmentVariables {
   @IsString()
   MAIL_FROM_NAME?: string;
 
+  // --- AI (optional). Without keys the app works normally; AI work waits. ---
+  // Gemini (Google AI Studio, free tier) — main judge, can listen to audio.
+  @IsOptional()
+  @IsString()
+  GEMINI_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  GEMINI_MODEL?: string;
+
+  @IsOptional()
+  @IsString()
+  GEMINI_BASE_URL?: string;
+
+  // Groq (free tier) — backup: text judge + Whisper speech-to-text.
+  @IsOptional()
+  @IsString()
+  GROQ_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  GROQ_MODEL?: string;
+
+  @IsOptional()
+  @IsString()
+  GROQ_WHISPER_MODEL?: string;
+
+  @IsOptional()
+  @IsString()
+  GROQ_BASE_URL?: string;
+
+  // Our own caps, kept below the free tiers (requests per UTC day / gap in ms).
+  @IsOptional()
+  @IsString()
+  AI_DAILY_LIMIT_GEMINI?: string;
+
+  @IsOptional()
+  @IsString()
+  AI_DAILY_LIMIT_GROQ?: string;
+
+  @IsOptional()
+  @IsString()
+  AI_MIN_GAP_MS?: string;
+
   // --- Optional TURN relay for calls ---
   @IsOptional()
   @IsString()

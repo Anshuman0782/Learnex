@@ -54,6 +54,11 @@ export const NotificationRouter: React.FC = () => {
         case 'announcement':
           openNotifications();
           return;
+        case 'mentor-test':
+          if (navigationRef.isReady()) {
+            navigationRef.navigate('MentorTest', { skill: data.skill as string | undefined, addSkill: true });
+          }
+          return;
         case 'post':
         default: {
           if (!data.postId) {

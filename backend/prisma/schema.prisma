@@ -60,6 +60,8 @@ model User {
 
   /// Every skill the member has joined, each with its own role.
   skills       UserSkill[]
+  aiReviews          AiReview[]
+  mentorApplications MentorApplication[]
   memberships  CommunityMembership[]
   posts        Post[]
   comments     Comment[]
@@ -243,6 +245,7 @@ model Post {
   saves       PostSave[]
   views       PostView[]
   reposts     Repost[]
+  aiReview    AiReview?
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt      @map("updated_at")
@@ -893,4 +896,133 @@ model Broadcast {
 
   @@index([status, scheduledAt])
   @@map("broadcasts")
+}
+
+// ---------------------------------------------------------------------------
+// AI (Stage 1): learner progress + AI mentor test, for Coding, Music and
+// Spoken English. All AI work runs in the background through AiJob, so the
+// app never waits on (or breaks because of) an AI provider.
+// ---------------------------------------------------------------------------
+
+/// One unit of background AI work. Claimed with a short lease, so a crashed
+/// worker's job is picked up again; retried with back-off when a provider fails.
+model AiJob {
+  id          String    @id @default(uuid())
+  /// 'POST_REVIEW' | 'MENTOR_TEST'
+  kind        String
+  /// The post id (POST_REVIEW) or mentor-application id (MENTOR_TEST).
+  refId       String    @map("ref_id")
+  /// 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED' | 'SKIPPED'
+  status      String    @default("PENDING")
+  attempts    Int       @default(0)
+  runAfter    DateTime  @default(now()) @map("run_after")
+  lockedUntil DateTime? @map("locked_until")
+  lastError   String?   @map("last_error")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([kind, refId])
+  @@index([status, runAfter])
+  @@map("ai_jobs")
+}
+
+/// The AI review of one post, scored against its skill's checklist.
+model AiReview {
+  id            String   @id @default(uuid())
+  postId        String   @unique @map("post_id")
+  userId        String   @map("user_id")
+  /// AI skill id: 'coding' | 'music' | 'spoken_english'
+  skill         String
+  /// The member's own name for the skill (e.g. "Singing").
+  skillLabel    String   @map("skill_label")
+  rubricVersion Int      @map("rubric_version")
+  /// 0-100 overall (weighted average of the scored criteria).
+  overall       Int
+  /// { criterionKey: 0-100 | null }
+  scores        Json
+  strengths     Json
+  improvements  Json
+  summary       String   @db.Text
+  /// 0-1: how sure the AI is (low when it could only partly judge).
+  confidence    Float
+  /// Our own measurements (pitch, speaking pace, ...).
+  metrics       Json?
+  transcript    String?  @db.Text
+  provider      String
+  model         String
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, skill, createdAt])
+  @@map("ai_reviews")
+}
+
+/// An AI-judged mentor test: a live, timed task + a critique task.
+model MentorApplication {
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  /// AI skill id and the member's own label for it.
+  skill      String
+  skillLabel String    @map("skill_label")
+  /// 'STARTED' | 'SUBMITTED' | 'PASSED' | 'REVIEW' | 'FAILED' | 'EXPIRED'
+  status     String    @default("STARTED")
+  /// The random task, check phrase and critique case shown to the applicant.
+  task       Json
+  startedAt  DateTime  @default(now()) @map("started_at")
+  expiresAt  DateTime  @map("expires_at")
+  submittedAt DateTime? @map("submitted_at")
+
+  recordingUrl  String?  @map("recording_url")
+  recordingMime String?  @map("recording_mime")
+  durationMs    Int?     @map("duration_ms")
+  codeAnswer    String?  @db.Text @map("code_answer")
+  critiqueText  String?  @db.Text @map("critique_text")
+
+  aiScore          Int?    @map("ai_score")
+  performanceScore Int?    @map("performance_score")
+  critiqueScore    Int?    @map("critique_score")
+  /// Full AI output + our measurements, for the admin and the applicant.
+  aiResult         Json?   @map("ai_result")
+  /// Why it went to admin review (low confidence, AI unavailable, ...).
+  aiNote           String? @map("ai_note")
+
+  decidedById  String?   @map("decided_by_id")
+  decidedAt    DateTime? @map("decided_at")
+  decisionNote String?   @map("decision_note")
+  retryAfter   DateTime? @map("retry_after")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, skill])
+  @@index([status])
+  @@map("mentor_applications")
+}
+
+/// Admin switches per AI skill.
+model AiSkillSetting {
+  skill             String  @id
+  progressEnabled   Boolean @default(true) @map("progress_enabled")
+  mentorTestEnabled Boolean @default(true) @map("mentor_test_enabled")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("ai_skill_settings")
+}
+
+/// AI requests per provider per day (admin usage view + our own daily cap).
+model AiUsageDay {
+  day      String // 'YYYY-MM-DD' (UTC)
+  provider String
+  requests Int    @default(0)
+  failures Int    @default(0)
+
+  @@id([day, provider])
+  @@map("ai_usage_days")
 }
