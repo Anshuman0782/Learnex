@@ -152,6 +152,7 @@ export class AiRouterService {
       const out = await this.spaced(fn);
       await this.count(p.name, false);
       this.lastError.delete(p.name);
+      this.coolUntil.delete(p.name); // it works again → no need to keep it resting
       return out;
     } catch (e) {
       await this.count(p.name, true);

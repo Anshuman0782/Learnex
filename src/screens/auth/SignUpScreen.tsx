@@ -293,6 +293,7 @@ export const SignUpScreen: React.FC = () => {
             onRightIconPress={() => setShowDatePickerModal(true)}
             error={errors.dob}
           />
+          
 
           {/* Primary Hobby Selection */}
           <View style={styles.hobbyBlock}>

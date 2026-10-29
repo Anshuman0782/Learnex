@@ -16,6 +16,9 @@ export function startFakeAi(port) {
     transcript: 'hello my name is test orange river seven and today I will talk about learning',
     spokenIntro: '',
     whisperText: null,
+    // null = accept any model name; a list = only these exist (others → 404 like the real APIs).
+    geminiModels: null,
+    groqModels: null,
   };
 
   const schemaKeys = (prompt) => {
@@ -78,9 +81,27 @@ export function startFakeAi(port) {
       const raw = Buffer.concat(chunks);
       res.setHeader('Content-Type', 'application/json');
       try {
+        // ---------------- Gemini: list models ----------------
+        if (req.method === 'GET' && req.url.startsWith('/v1beta/models')) {
+          calls.push({ provider: 'gemini', kind: 'listModels', key: req.headers['x-goog-api-key'] });
+          const list = S.geminiModels ?? ['gemini-flash-latest'];
+          return res.end(
+            JSON.stringify({
+              models: [
+                ...list.map((n) => ({ name: `models/${n}`, supportedGenerationMethods: ['generateContent', 'countTokens'] })),
+                { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] },
+              ],
+            }),
+          );
+        }
         // ---------------- Gemini ----------------
         const gm = /^\/v1beta\/models\/([^:]+):generateContent$/.exec(req.url);
         if (gm) {
+          const model = decodeURIComponent(gm[1]);
+          if (S.geminiModels && !S.geminiModels.includes(model)) {
+            calls.push({ provider: 'gemini', kind: 'missingModel', model });
+            return res.writeHead(404).end(JSON.stringify({ error: { code: 404, message: `This model models/${model} is no longer available to new users. Please update your code to use models/${S.geminiModels[0]} for the latest features and improvements.`, status: 'NOT_FOUND' } }));
+          }
           const body = JSON.parse(raw.toString());
           const parts = body?.contents?.[0]?.parts ?? [];
           const prompt = parts.map((p) => p.text ?? '').join('\n');
@@ -104,8 +125,17 @@ export function startFakeAi(port) {
           return res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }] }));
         }
         // ---------------- Groq chat ----------------
+        if (req.method === 'GET' && req.url === '/openai/v1/models') {
+          calls.push({ provider: 'groq', kind: 'listModels', auth: req.headers.authorization });
+          const list = S.groqModels ?? ['openai/gpt-oss-120b', 'whisper-large-v3-turbo'];
+          return res.end(JSON.stringify({ object: 'list', data: list.map((id) => ({ id, object: 'model', active: true })) }));
+        }
         if (req.url === '/openai/v1/chat/completions') {
           const body = JSON.parse(raw.toString());
+          if (S.groqModels && !S.groqModels.includes(body.model)) {
+            calls.push({ provider: 'groq', kind: 'missingModel', model: body.model });
+            return res.writeHead(404).end(JSON.stringify({ error: { message: `The model \`${body.model}\` does not exist or you do not have access to it.`, type: 'invalid_request_error', code: 'model_not_found' } }));
+          }
           const system = body.messages?.find((m) => m.role === 'system')?.content ?? '';
           const prompt = body.messages?.find((m) => m.role === 'user')?.content ?? '';
           const kind = classify(system, prompt);
@@ -126,9 +156,13 @@ export function startFakeAi(port) {
             multipart: ct.startsWith('multipart/form-data'),
             hasFile: /name="file"; filename="audio\.mp3"/.test(text),
             model: /name="model"\r\n\r\n([^\r]+)/.exec(text)?.[1],
+            missing: !!S.groqModels && !S.groqModels.includes(/name="model"\r\n\r\n([^\r]+)/.exec(text)?.[1]),
             format: /name="response_format"\r\n\r\n([^\r]+)/.exec(text)?.[1],
             bytes: raw.length,
           });
+          if (calls[calls.length - 1].missing) {
+            return res.writeHead(404).end(JSON.stringify({ error: { message: 'The model does not exist', type: 'invalid_request_error', code: 'model_not_found' } }));
+          }
           const mode = take('groq');
           if (failure(res, mode) !== null) return;
           const words = S.whisperText ?? S.transcript;

@@ -92,6 +92,19 @@ try {
   ok((await j('GET', '/admin/ai/status', learnerForbidden.token)).status === 403, 'non-admins cannot see AI admin');
 
   // ===================================================================
+  section('Retired model names (the real 404s from Google and Groq)');
+  // The providers no longer offer our configured/default model names.
+  S.geminiModels = ['gemini-3.8-flash', 'gemini-3.8-flash-lite', 'gemini-3.8-pro'];
+  S.groqModels = ['llama-3.1-8b-instant', 'openai/gpt-oss-120b', 'meta-llama/llama-guard-4-12b', 'whisper-large-v3', 'whisper-large-v3-turbo'];
+  const ping2 = await j('POST', '/admin/ai/test', ADMIN.token);
+  ok(ping2.status === 200 && ping2.data.every((p) => p.ok), `after "model not found", both providers recover by themselves (${JSON.stringify(ping2.data.map((p) => p.name + ':' + p.ok + (p.error ? ' ' + p.error : '')))})`);
+  ok(calls.some((c) => c.provider === 'gemini' && c.kind === 'missingModel'), 'Gemini really answered 404 for the old model first');
+  const st4 = await j('GET', '/admin/ai/status', ADMIN.token);
+  ok(st4.data.providers.find((p) => p.name === 'gemini').model === 'gemini-3.8-flash', `Gemini switched to Google's suggested model (${st4.data.providers.find((p) => p.name === 'gemini').model})`);
+  ok(st4.data.providers.find((p) => p.name === 'groq').model === 'openai/gpt-oss-120b', `Groq switched to its best current model (${st4.data.providers.find((p) => p.name === 'groq').model})`);
+  ok(st4.data.providers.every((p) => !p.coolingUntil), 'neither provider is left "Resting"');
+
+  // ===================================================================
   section('Learner progress — Coding');
   const L = await mk(`AiLrn${rnd}`, 'LEARNER', [['Coding', 'LEARNER']]);
   S.codingQueue = [50, 55, 60, 75, 80];

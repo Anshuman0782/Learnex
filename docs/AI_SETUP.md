@@ -34,8 +34,8 @@ These are changed in the Render dashboard, not in code.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Change if Google renames/retires the model |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Groq text model |
+| `GEMINI_MODEL` | `gemini-flash-latest` | Preferred model. If it's retired, the server picks a current one automatically |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Preferred Groq text model (auto-replaced if retired) |
 | `GROQ_WHISPER_MODEL` | `whisper-large-v3-turbo` | Groq speech-to-text model |
 | `AI_DAILY_LIMIT_GEMINI` | `200` | Our own daily cap (kept below the free quota) |
 | `AI_DAILY_LIMIT_GROQ` | `500` | Our own daily cap |
