@@ -26,14 +26,23 @@ const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
   FAILED: { color: '#B91C1C', bg: '#FEE2E2' },
   EXPIRED: { color: '#475569', bg: '#F1F5F9' },
 };
-const PROVIDER_NAME: Record<string, string> = { gemini: 'Google Gemini (main judge)', groq: 'Groq (backup)' };
+const PROVIDER_NAME: Record<string, string> = {
+  gemini: 'Google Gemini (main judge)',
+  groq: 'Groq (backup)',
+  'gemini-audio': 'Gemini · listening to audio',
+  'groq-speech': 'Groq · speech-to-text',
+};
+const ago = (iso: string) => {
+  const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
+};
 
 /** Admin → AI: provider health, per-skill switches, and mentor tests to decide. */
 export const AdminAiTab: React.FC<{ onForbidden: () => void }> = ({ onForbidden }) => {
   const [status, setStatus] = useState<AiAdminStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ name: string; ok: boolean; ms: number; error?: string }[] | null>(null);
+  const [testResult, setTestResult] = useState<{ name: string; label?: string; ok: boolean; ms: number; error?: string }[] | null>(null);
   const [filter, setFilter] = useState<'REVIEW' | 'ALL'>('REVIEW');
   const [rows, setRows] = useState<AdminMentorTestRow[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -112,14 +121,20 @@ export const AdminAiTab: React.FC<{ onForbidden: () => void }> = ({ onForbidden 
               Model {p.model} · {p.requestsToday}/{p.dailyLimit ?? '∞'} requests today{p.failuresToday ? ` · ${p.failuresToday} failed` : ''}
             </Text>
             {!!p.coolingUntil && <Text style={styles.small}>Back at {new Date(p.coolingUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</Text>}
-            {!!p.lastError && <Text style={styles.err} numberOfLines={2}>{p.lastError}</Text>}
+            {!!p.lastOkAt && (
+              <Text style={[styles.small, { color: '#15803D' }]}>
+                Last worked {ago(p.lastOkAt)}{p.lastOkMs != null ? ` · took ${(p.lastOkMs / 1000).toFixed(1)} s` : ''}
+              </Text>
+            )}
+            {!!p.lastError && <Text style={styles.err} numberOfLines={3}>Last error: {p.lastError}</Text>}
           </View>
         ))}
         <Row label="Audio tool (pitch / speech analysis)" value={status.audioTool ? 'Available' : 'Missing'} />
         <PrimaryButton label="Test connection" icon="pulse" onPress={runTest} busy={testing} outline />
+        {testing && <Text style={styles.small}>Testing text, audio listening and speech-to-text — this can take up to a minute…</Text>}
         {testResult?.map((r) => (
           <Text key={r.name} style={[styles.small, { color: r.ok ? '#15803D' : '#B91C1C' }]}>
-            {r.ok ? '✓' : '✗'} {PROVIDER_NAME[r.name] ?? r.name}: {r.ok ? `OK (${r.ms} ms)` : r.error}
+            {r.ok ? '✓' : '✗'} {PROVIDER_NAME[r.name] ?? r.label ?? r.name}: {r.ok ? `OK (${(r.ms / 1000).toFixed(1)} s)` : r.error}
           </Text>
         ))}
       </Section>
@@ -223,6 +238,21 @@ const MentorTestDetail: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // While the AI is judging, refresh every 5 s so its scores appear by themselves.
+  useEffect(() => {
+    if (!id || d?.status !== 'SUBMITTED') return;
+    const t = setInterval(() => {
+      getAdminMentorTestRequest(id)
+        .then((next) => {
+          setD(next);
+          if (next.status !== 'SUBMITTED') onChanged();
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, d?.status]);
+
   const togglePlay = () => {
     if (!d?.recordingUrl) return;
     if (player.current) {
@@ -267,7 +297,9 @@ const MentorTestDetail: React.FC<{
 
   const perf = d?.aiResult?.performance;
   const crit = d?.aiResult?.critique;
-  const open = d && (d.status === 'REVIEW' || d.status === 'SUBMITTED');
+  // Decisions only once the AI's scores are in (REVIEW) — never blind.
+  const open = d?.status === 'REVIEW';
+  const judging = d?.status === 'SUBMITTED';
 
   return (
     <Modal visible={!!id} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -290,6 +322,25 @@ const MentorTestDetail: React.FC<{
               </View>
               <Badge text={d.status} color={(STATUS_COLORS[d.status] ?? STATUS_COLORS.EXPIRED).color} bg={(STATUS_COLORS[d.status] ?? STATUS_COLORS.EXPIRED).bg} />
             </View>
+
+            {judging && (
+              <Section title="The AI is judging this test" subtitle="Scores appear here automatically — then you can decide" icon="hourglass">
+                <ActivityIndicator color={ADMIN_ACCENT} />
+                {!!d.judging && (
+                  <>
+                    <Text style={styles.small}>
+                      {d.judging.state === 'RUNNING'
+                        ? 'Working on it now…'
+                        : d.judging.nextTryAt
+                        ? `Attempt ${d.judging.attempts} didn't finish — next try at ${new Date(d.judging.nextTryAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                        : 'Waiting in the queue…'}
+                    </Text>
+                    {!!d.judging.lastError && <Text style={styles.err}>Last problem: {d.judging.lastError}</Text>}
+                  </>
+                )}
+                <Text style={styles.small}>If the AI can’t finish after several tries, the test comes to you automatically.</Text>
+              </Section>
+            )}
 
             <Section title={`${d.skillLabel} · ${d.score ?? '—'}/100`} subtitle={`Performance ${d.performanceScore ?? '—'} · Mentoring ${d.critiqueScore ?? '—'} · pass 75`} icon="analytics">
               {!!d.aiNote && <Text style={styles.warn}>⚠ {d.aiNote}</Text>}

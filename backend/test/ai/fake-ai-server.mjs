@@ -19,6 +19,8 @@ export function startFakeAi(port) {
     // null = accept any model name; a list = only these exist (others → 404 like the real APIs).
     geminiModels: null,
     groqModels: null,
+    // true = this Gemini model rejects a thinking limit (400), like some real models.
+    rejectThinking: false,
   };
 
   const schemaKeys = (prompt) => {
@@ -28,7 +30,7 @@ export function startFakeAi(port) {
   };
 
   function classify(system, prompt) {
-    if (prompt.includes('Return {"ok": true}')) return 'ping';
+    if (prompt.includes('Return {"ok": true')) return 'ping';
     if (system.includes('precise transcription')) return 'transcribe';
     if (system.includes('programming mentor reviewing')) return 'coding';
     if (system.includes('grading a timed MENTOR')) return 'codingTest';
@@ -103,6 +105,10 @@ export function startFakeAi(port) {
             return res.writeHead(404).end(JSON.stringify({ error: { code: 404, message: `This model models/${model} is no longer available to new users. Please update your code to use models/${S.geminiModels[0]} for the latest features and improvements.`, status: 'NOT_FOUND' } }));
           }
           const body = JSON.parse(raw.toString());
+          if (S.rejectThinking && body?.generationConfig?.thinkingConfig) {
+            calls.push({ provider: 'gemini', kind: 'thinkingRejected' });
+            return res.writeHead(400).end(JSON.stringify({ error: { code: 400, message: 'Thinking budget is not supported by this model.', status: 'INVALID_ARGUMENT' } }));
+          }
           const parts = body?.contents?.[0]?.parts ?? [];
           const prompt = parts.map((p) => p.text ?? '').join('\n');
           const media = parts.find((p) => p.inlineData);
@@ -116,6 +122,7 @@ export function startFakeAi(port) {
             json: body?.generationConfig?.responseMimeType,
             mediaMime: media?.inlineData?.mimeType ?? null,
             mediaBytes: media ? Buffer.from(media.inlineData.data, 'base64').length : 0,
+            thinking: body?.generationConfig?.thinkingConfig ?? null,
             prompt,
             system,
           });

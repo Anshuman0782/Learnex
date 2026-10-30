@@ -40,6 +40,8 @@ export class AiRouterService {
   readonly providers: AiProvider[];
   private readonly coolUntil = new Map<string, number>();
   private readonly lastError = new Map<string, string>();
+  /** Last successful request per provider: when, and how long it took. */
+  private readonly lastOk = new Map<string, { at: number; ms: number }>();
   private readonly dailyLimit: Record<string, number>;
   private readonly minGapMs: number;
   private lastCallAt = 0;
@@ -87,6 +89,8 @@ export class AiRouterService {
         dailyLimit: this.dailyLimit[p.name] ?? null,
         coolingUntil: cool > Date.now() ? new Date(cool).toISOString() : null,
         lastError: this.lastError.get(p.name) ?? null,
+        lastOkAt: this.lastOk.has(p.name) ? new Date(this.lastOk.get(p.name)!.at).toISOString() : null,
+        lastOkMs: this.lastOk.get(p.name)?.ms ?? null,
       };
     });
   }
@@ -149,7 +153,12 @@ export class AiRouterService {
 
   private async attempt<T>(p: AiProvider, fn: () => Promise<T>): Promise<T> {
     try {
-      const out = await this.spaced(fn);
+      let started = 0;
+      const out = await this.spaced(() => {
+        started = Date.now();
+        return fn();
+      });
+      this.lastOk.set(p.name, { at: Date.now(), ms: Date.now() - started });
       await this.count(p.name, false);
       this.lastError.delete(p.name);
       this.coolUntil.delete(p.name); // it works again → no need to keep it resting
@@ -206,23 +215,40 @@ export class AiRouterService {
     throw last!;
   }
 
-  /** Admin "test connection": one tiny request per configured provider. */
-  async ping() {
-    const out: { name: string; ok: boolean; ms: number; error?: string }[] = [];
-    for (const p of this.providers) {
-      if (!p.configured()) {
-        out.push({ name: p.name, ok: false, ms: 0, error: 'No API key set' });
-        continue;
-      }
+  /**
+   * Admin "test connection": a tiny text request per configured provider, plus
+   * a short audio clip to the listening model and to speech-to-text — the same
+   * paths Music and Spoken English use.
+   */
+  async ping(tone?: AiMedia | null) {
+    const out: { name: string; label: string; ok: boolean; ms: number; error?: string }[] = [];
+    const run = async (p: AiProvider, name: string, label: string, fn: () => Promise<unknown>, check: (r: any) => boolean) => {
       const t = Date.now();
       try {
-        const r = await this.attempt(p, () =>
-          p.generateJson({ system: 'Reply only with JSON.', prompt: 'Return {"ok": true}.' }),
-        );
-        const ok = !!(r.data && typeof r.data === 'object' && (r.data as any).ok === true);
-        out.push({ name: p.name, ok, ms: Date.now() - t, ...(ok ? {} : { error: 'Unexpected reply' }) });
+        const r = await this.attempt(p, fn as () => Promise<any>);
+        const ok = check(r);
+        out.push({ name, label, ok, ms: Date.now() - t, ...(ok ? {} : { error: 'Unexpected reply' }) });
       } catch (e) {
-        out.push({ name: p.name, ok: false, ms: Date.now() - t, error: (e as Error).message.slice(0, 200) });
+        out.push({ name, label, ok: false, ms: Date.now() - t, error: (e as Error).message.slice(0, 300) });
+      }
+    };
+    for (const p of this.providers) {
+      if (!p.configured()) {
+        out.push({ name: p.name, label: `${p.name} (text)`, ok: false, ms: 0, error: 'No API key set' });
+        continue;
+      }
+      await run(p, p.name, `${p.name} · text`, () => p.generateJson({ system: 'Reply only with JSON.', prompt: 'Return {"ok": true}.' }), (r) => r?.data?.ok === true);
+      if (tone && p.canHear) {
+        await run(
+          p,
+          `${p.name}-audio`,
+          `${p.name} · listening (audio)`,
+          () => p.generateJson({ system: 'Reply only with JSON.', prompt: 'Listen to the attached short clip. Return {"ok": true, "heard": "<what you hear, 3 words>"}.', media: tone }),
+          (r) => r?.data?.ok === true,
+        );
+      }
+      if (tone && p.canTranscribe && p.name === 'groq' && p.transcribe) {
+        await run(p, `${p.name}-speech`, `${p.name} · speech-to-text`, () => p.transcribe!(tone), (r) => typeof r?.text === 'string');
       }
     }
     return out;

@@ -63,6 +63,16 @@ async function until(fn, ms = 25000, step = 300) {
     await wait(step);
   }
 }
+/** Start a mentor test; if the anti-spam limit (10/min) is hit, wait a minute and retry. */
+async function startTest(token, skill) {
+  let r = await j('POST', '/ai/mentor-test/start', token, { skill });
+  if (r.status === 429) {
+    console.log('   (waiting 61 s — mentor-test start is limited to 10 per minute)');
+    await wait(61_000);
+    r = await j('POST', '/ai/mentor-test/start', token, { skill });
+  }
+  return r;
+}
 const reviewOf = (postId) => until(() => prisma.aiReview.findUnique({ where: { postId } }));
 const jobOf = (kind, refId) => prisma.aiJob.findUnique({ where: { kind_refId: { kind, refId } } });
 const appDone = (id) => until(async () => { const a = await prisma.mentorApplication.findUnique({ where: { id } }); return a && a.status !== 'SUBMITTED' ? a : null; });
@@ -84,6 +94,10 @@ try {
   ok(st.data.skills?.length === 3 && st.data.skills.every((s) => s.progressEnabled && s.mentorTestEnabled), 'Coding, Music, Spoken English enabled by default');
   const ping = await j('POST', '/admin/ai/test', ADMIN.token);
   ok(ping.status === 200 && ping.data.every((p) => p.ok), `connection test passes for both (${JSON.stringify(ping.data.map((p) => p.name + ':' + p.ok))})`);
+  ok(ping.data.some((p) => p.name === 'gemini-audio' && p.ok) && ping.data.some((p) => p.name === 'groq-speech' && p.ok), 'connection test also checks audio listening + speech-to-text');
+  const audioPing = calls.find((c) => c.provider === 'gemini' && c.kind === 'ping' && c.mediaMime);
+  ok(audioPing?.mediaMime === 'audio/mp3' && audioPing.mediaBytes > 500, `listening test sends a real audio clip (${audioPing?.mediaBytes} bytes)`);
+  ok(calls.find((c) => c.provider === 'gemini' && c.kind === 'ping')?.thinking?.thinkingBudget === 512, 'Gemini is asked to keep "thinking" short (faster, no timeouts)');
   const gPing = calls.find((c) => c.provider === 'gemini' && c.kind === 'ping');
   ok(gPing?.key === 'test-gemini' && gPing.json === 'application/json', 'Gemini request: API key header + JSON mode');
   const qPing = calls.find((c) => c.provider === 'groq' && c.kind === 'ping');
@@ -221,11 +235,11 @@ try {
   ok(elC.data.mode === 'ai' && elM.data.mode === 'quiz', 'Coding uses the AI test; Marketing keeps the quiz');
 
   section('AI mentor test — Coding (pass)');
-  const s1 = await j('POST', '/ai/mentor-test/start', NEW.token, { skill: 'Coding' });
+  const s1 = await startTest(NEW.token, 'Coding');
   ok(s1.status === 200 && s1.data.task?.mode === 'code' && s1.data.task.prompt.length > 20 && s1.data.status === 'STARTED', 'random coding task drawn, clock started');
   const leaked = JSON.stringify(s1.data);
   ok(!leaked.includes('judgeNotes') && !leaked.includes('keyIssues'), 'hidden judge notes / key issues are NOT sent to the applicant');
-  const s1b = await j('POST', '/ai/mentor-test/start', NEW.token, { skill: 'Coding' });
+  const s1b = await startTest(NEW.token, 'Coding');
   ok(s1b.data.id === s1.data.id, 'starting again resumes the same test (no re-rolling the task)');
   ok((await j('POST', `/ai/mentor-test/${s1.data.id}/submit`, NEW.token, { codeAnswer: 'function f(){return 1}', critiqueText: 'too short' })).status === 400, 'a too-short critique is refused');
   S.score.codingTest = 90; S.score.critique = 85; S.confidence = 0.9; S.taskCompliance = 90;
@@ -237,16 +251,16 @@ try {
   const u1 = await prisma.user.findUnique({ where: { id: NEW.id } });
   ok(sk1?.role === 'MENTOR' && u1.role === 'MENTOR', 'now a Mentor in Coding (main skill → account role Mentor)');
   ok(!!(await prisma.notification.findFirst({ where: { userId: NEW.id, title: { contains: 'Mentor' } } })), 'applicant notified');
-  ok((await j('POST', '/ai/mentor-test/start', NEW.token, { skill: 'Coding' })).status === 400, 'cannot take the test again once a Mentor');
+  ok((await startTest(NEW.token, 'Coding')).status === 400, 'cannot take the test again once a Mentor');
 
   section('AI mentor test — Coding (fail → 7-day retry)');
   const F = await mk(`AiFail${rnd}`, 'LEARNER', [['Coding', 'LEARNER']]);
-  const sf = await j('POST', '/ai/mentor-test/start', F.token, { skill: 'Coding' });
+  const sf = await startTest(F.token, 'Coding');
   S.score.codingTest = 30; S.score.critique = 40;
   await j('POST', `/ai/mentor-test/${sf.data.id}/submit`, F.token, { codeAnswer: 'print("hello world") # not the task', critiqueText: 'Looks good to me, nice job, keep going and practise more every day.' });
   const af = await appDone(sf.data.id);
   ok(af?.status === 'FAILED' && af.retryAfter && af.retryAfter.getTime() > Date.now() + 6 * 86400_000, `FAILED (${af?.aiScore}/100), retry in 7 days`);
-  const again = await j('POST', '/ai/mentor-test/start', F.token, { skill: 'Coding' });
+  const again = await startTest(F.token, 'Coding');
   ok(again.status === 403, 'retry blocked until the cooldown ends');
   const mineF = await j('GET', '/ai/mentor-test/mine', F.token);
   ok(mineF.data[0]?.feedback?.improvements?.length > 0, 'failed applicant sees their feedback');
@@ -254,7 +268,7 @@ try {
 
   section('AI mentor test — borderline → admin review');
   const B = await mk(`AiMid${rnd}`, 'LEARNER', [['Coding', 'LEARNER']]);
-  const sb = await j('POST', '/ai/mentor-test/start', B.token, { skill: 'Coding' });
+  const sb = await startTest(B.token, 'Coding');
   S.score.codingTest = 68; S.score.critique = 66;
   await j('POST', `/ai/mentor-test/${sb.data.id}/submit`, B.token, { codeAnswer: 'def second(a):\n  s = sorted(set(a))\n  return s[-2] if len(s) > 1 else None', critiqueText: 'The loop skips the first item because it starts at 1. Use sum(nums) and handle empty lists.' });
   const ab = await appDone(sb.data.id);
@@ -269,9 +283,30 @@ try {
   ok((await j('POST', `/admin/ai/mentor-tests/${sb.data.id}/decide`, ADMIN.token, { decision: 'reject' })).status === 400, 'a decided test cannot be decided twice');
   ok((await j('POST', `/admin/ai/mentor-tests/${sb.data.id}/decide`, B.token, { decision: 'approve' })).status === 403, 'applicants cannot approve themselves');
 
+  section('Admin can only decide once the AI scores are in');
+  const W = await mk(`AiWait${rnd}`, 'LEARNER', [['Coding', 'LEARNER']]);
+  const sw = await startTest(W.token, 'Coding');
+  S.gemini = { mode: '503', times: 1 };
+  S.groq = { mode: '503', times: 1 };
+  S.score.codingTest = 90; S.score.critique = 90; S.confidence = 0.9;
+  await j('POST', `/ai/mentor-test/${sw.data.id}/submit`, W.token, { codeAnswer: 'function f(a){ return [...new Set(a)].sort((x,y)=>y-x)[1] ?? null } // explained', critiqueText: 'Start the loop at index 0 and guard against an empty list before dividing.' });
+  const waiting = await until(async () => {
+    const d = await j('GET', `/admin/ai/mentor-tests/${sw.data.id}`, ADMIN.token);
+    return d.data.status === 'SUBMITTED' && d.data.judging?.attempts >= 1 && d.data.judging?.state === 'PENDING' ? d : null;
+  });
+  ok(!!waiting && waiting.data.judging.nextTryAt && waiting.data.judging.lastError, 'admin sees the AI is still judging (attempt, next try, last problem)');
+  const early = await j('POST', `/admin/ai/mentor-tests/${sw.data.id}/decide`, ADMIN.token, { decision: 'approve' });
+  ok(early.status === 400 && /still judging/i.test(JSON.stringify(early.data)), 'cannot approve/reject before the AI scores are in');
+  S.gemini = { mode: 'ok', times: Infinity };
+  S.groq = { mode: 'ok', times: Infinity };
+  await prisma.aiJob.updateMany({ where: { kind: 'MENTOR_TEST', refId: sw.data.id }, data: { runAfter: new Date() } });
+  await j('POST', '/posts', L.token, { content: CODE(40), title: 'wake2', postType: 'text' }); // wakes the worker
+  const aw = await until(async () => { const x = await prisma.mentorApplication.findUnique({ where: { id: sw.data.id } }); return x && x.status !== 'SUBMITTED' ? x : null; }, 75_000);
+  ok(aw?.status === 'PASSED' && aw.aiResult, 'after the retry the AI scores and decides');
+
   section('AI mentor test — low AI confidence never auto-decides');
   const LC = await mk(`AiLow${rnd}`, 'LEARNER', [['Coding', 'LEARNER']]);
-  const sl = await j('POST', '/ai/mentor-test/start', LC.token, { skill: 'Coding' });
+  const sl = await startTest(LC.token, 'Coding');
   S.score.codingTest = 95; S.score.critique = 95; S.confidence = 0.4;
   await j('POST', `/ai/mentor-test/${sl.data.id}/submit`, LC.token, { codeAnswer: 'function solve(){ return 42 } // explained approach here', critiqueText: 'Start the loop at 0 instead of 1 and guard the empty list before dividing.' });
   const al = await appDone(sl.data.id);
@@ -280,14 +315,14 @@ try {
 
   section('AI mentor test — time limit');
   const T = await mk(`AiTime${rnd}`, 'LEARNER', [['Coding', 'LEARNER']]);
-  const stt = await j('POST', '/ai/mentor-test/start', T.token, { skill: 'Coding' });
+  const stt = await startTest(T.token, 'Coding');
   await prisma.mentorApplication.update({ where: { id: stt.data.id }, data: { expiresAt: new Date(Date.now() - 10 * 60_000) } });
   const late = await j('POST', `/ai/mentor-test/${stt.data.id}/submit`, T.token, { codeAnswer: 'function late(){ return 1 }', critiqueText: 'Start the loop at zero and check for an empty list first.' });
   ok(late.status === 400 && (await prisma.mentorApplication.findUnique({ where: { id: stt.data.id } })).status === 'EXPIRED', 'late hand-in refused (EXPIRED)');
 
   section('AI mentor test — Spoken English (live recording + check phrase)');
   const SE = await mk(`AiSpk${rnd}`, 'LEARNER', [['Spoken English', 'LEARNER']]);
-  const se = await j('POST', '/ai/mentor-test/start', SE.token, { skill: 'Spoken English' });
+  const se = await startTest(SE.token, 'Spoken English');
   ok(se.data.task?.mode === 'audio' && se.data.task.checkPhrase?.split(' ').length === 3, `audio task with a random check phrase ("${se.data.task?.checkPhrase}")`);
   const rec = await upload(SE.token, melodyMp3(60), 'audio/mpeg', 'rec.mp3');
   ok((await j('POST', `/ai/mentor-test/${se.data.id}/submit`, SE.token, { recordingUrl: 'https://evil.example.com/x.mp3', critiqueText: 'Use went instead of go for the past and say uncle’s house.' })).status === 400, 'recordings that are not LERNEX uploads are refused');
@@ -299,7 +334,7 @@ try {
   ok(ase?.status === 'PASSED', `check phrase heard + strong scores → PASSED (${ase?.aiScore}/100)`);
 
   const SE2 = await mk(`AiSpk2${rnd}`, 'LEARNER', [['Spoken English', 'LEARNER']]);
-  const se2 = await j('POST', '/ai/mentor-test/start', SE2.token, { skill: 'Spoken English' });
+  const se2 = await startTest(SE2.token, 'Spoken English');
   S.whisperText = Array(140).fill('word').join(' ');
   S.spokenIntro = 'hello there';
   S.transcript = 'hello there ' + S.whisperText;
@@ -309,11 +344,11 @@ try {
 
   section('AI mentor test — Music');
   const MS = await mk(`AiMs${rnd}`, 'LEARNER', [['Music', 'LEARNER']]);
-  let ms = await j('POST', '/ai/mentor-test/start', MS.token, { skill: 'Music' });
+  let ms = await startTest(MS.token, 'Music');
   if (ms.status === 429) {
     ok(true, 'starting tests is rate-limited (10 per minute) — anti-spam');
     await wait(61_000);
-    ms = await j('POST', '/ai/mentor-test/start', MS.token, { skill: 'Music' });
+    ms = await startTest(MS.token, 'Music');
   }
   ok(ms.status === 200 && ms.data.task?.mode === 'audio', `music test started (${ms.status})`);
   const song2 = await upload(MS.token, melodyMp3(45), 'audio/mpeg', 'perf.mp3');
@@ -323,6 +358,13 @@ try {
   await j('POST', `/ai/mentor-test/${ms.data.id}/submit`, MS.token, { recordingUrl: song2.data.url, recordingMime: 'audio/mpeg', durationMs: 45000, critiqueText: 'Your high notes go flat because of breath support — plan breaths and practise sirens; use a metronome for the last line.' });
   const ams = await appDone(ms.data.id);
   ok(ams?.status === 'PASSED' && ams.aiResult?.performance?.metrics?.pitch?.pitchScore >= 85, `music test passed, our pitch measurement attached (${ams?.aiResult?.performance?.metrics?.pitch?.pitchScore})`);
+
+  section('Gemini models that refuse a thinking limit');
+  S.rejectThinking = true;
+  const th = await j('POST', '/posts', L.token, { content: CODE(41), title: 'thinking', postType: 'text' });
+  const thr = await reviewOf(th.data.id);
+  ok(thr?.provider === 'gemini' && calls.some((c) => c.kind === 'thinkingRejected'), 'Gemini said no to the thinking limit → we resend without it (still Gemini)');
+  S.rejectThinking = false;
 
   section('Admin switches');
   await j('PATCH', '/admin/ai/skills/coding', ADMIN.token, { progressEnabled: false, mentorTestEnabled: false });

@@ -255,8 +255,9 @@ export class MentorTestService implements OnModuleInit {
       thresholds: { pass: PASS_SCORE, fail: FAIL_SCORE },
     } as unknown as Prisma.InputJsonValue;
 
-    await this.prisma.mentorApplication.update({
-      where: { id: app.id },
+    // Only while still waiting — never overwrite a decision made in the meantime.
+    await this.prisma.mentorApplication.updateMany({
+      where: { id: app.id, status: 'SUBMITTED' },
       data: {
         aiScore: combined,
         performanceScore: perfScore,
@@ -277,8 +278,13 @@ export class MentorTestService implements OnModuleInit {
   async decide(id: string, decision: Decision, adminId: string | null, note: string | null) {
     const app = await this.prisma.mentorApplication.findUnique({ where: { id } });
     if (!app) throw new NotFoundException('Mentor test not found');
-    const open = adminId ? ['SUBMITTED', 'REVIEW'] : ['SUBMITTED'];
+    // Admins decide once the AI has finished (status REVIEW) — so they always
+    // see the AI's scores first. The AI only decides tests it is judging.
+    const open = adminId ? ['REVIEW'] : ['SUBMITTED'];
     if (!open.includes(app.status)) {
+      if (adminId && app.status === 'SUBMITTED') {
+        throw new BadRequestException('The AI is still judging this test — its scores will be here shortly');
+      }
       if (adminId) throw new BadRequestException('This test was already decided');
       return;
     }
@@ -349,9 +355,22 @@ export class MentorTestService implements OnModuleInit {
       include: { user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
     });
     if (!r) throw new NotFoundException('Mentor test not found');
+    // While the AI is judging: how far it got (so the admin knows what's happening).
+    const job =
+      r.status === 'SUBMITTED'
+        ? await this.prisma.aiJob.findUnique({ where: { kind_refId: { kind: 'MENTOR_TEST', refId: r.id } } })
+        : null;
     return {
       ...this.view(r),
       user: { id: r.user.id, name: r.user.name, email: r.user.email, avatarUrl: r.user.avatarUrl ?? '' },
+      judging: job
+        ? {
+            state: job.status,
+            attempts: job.attempts,
+            nextTryAt: job.status === 'PENDING' ? job.runAfter.toISOString() : null,
+            lastError: job.lastError,
+          }
+        : null,
       task: r.task, // full task incl. hidden notes — admins only
       recordingUrl: r.recordingUrl,
       codeAnswer: r.codeAnswer,

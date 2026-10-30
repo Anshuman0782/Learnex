@@ -19,6 +19,8 @@ export class GeminiProvider implements AiProvider {
   readonly canTranscribe = true;
   private readonly preferred: string;
   private resolved: string | null = null;
+  /** Ask for little "thinking" (much faster); turned off if a model rejects it. */
+  private limitThinking = true;
   private readonly key: string;
   private readonly base: string;
 
@@ -76,6 +78,9 @@ export class GeminiProvider implements AiProvider {
   }
 
   private async call(parts: unknown[], system: string, json: boolean, retried = false): Promise<string> {
+    // Audio takes the model much longer than text; this runs in the background.
+    const hasMedia = parts.some((p) => !!(p as { inlineData?: unknown }).inlineData);
+    const timeoutMs = hasMedia ? 240_000 : 90_000;
     let res: Response;
     try {
       res = await fetch(`${this.base}/v1beta/models/${encodeURIComponent(this.model)}:generateContent`, {
@@ -87,15 +92,29 @@ export class GeminiProvider implements AiProvider {
           generationConfig: {
             temperature: 0.2,
             ...(json ? { responseMimeType: 'application/json' } : {}),
+            // Judging a checklist doesn't need long hidden reasoning; it's what
+            // made requests time out. Small budget = fast, still careful.
+            ...(this.limitThinking ? { thinkingConfig: { thinkingBudget: 512 } } : {}),
           },
         }),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (e) {
-      throw new ProviderError(`gemini network error: ${(e as Error).message}`, true, 15_000);
+      const msg = (e as Error).message;
+      const timedOut = /abort|timeout/i.test(msg);
+      throw new ProviderError(
+        timedOut ? `gemini took longer than ${Math.round(timeoutMs / 1000)}s (${hasMedia ? 'audio' : 'text'} request)` : `gemini network error: ${msg}`,
+        true,
+        15_000,
+      );
     }
     const text = await res.text();
     if (!res.ok) {
+      // This model doesn't accept a thinking limit → send without it.
+      if (!retried && this.limitThinking && res.status === 400 && /thinking/i.test(text)) {
+        this.limitThinking = false;
+        return this.call(parts, system, json, true);
+      }
       // Retired / unknown model → pick a current one and try once more.
       if (!retried && isModelMissing(res.status, text) && (await this.reselect(text))) {
         return this.call(parts, system, json, true);

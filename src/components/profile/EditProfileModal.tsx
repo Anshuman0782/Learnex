@@ -27,7 +27,7 @@ interface EditProfileModalProps {
 }
 
 /** Starter suggestions; real categories people already use are merged in. */
-const BASE_SUGGESTIONS = ['Music', 'Coding', 'Design', 'Dance', 'Photography', 'Fitness', 'Art', 'Writing', 'Cooking', 'Languages', 'Marketing', 'Business'];
+const BASE_SUGGESTIONS = ['Music', 'Coding', 'Spoken English', 'Design', 'Dance', 'Photography', 'Fitness', 'Art', 'Writing', 'Cooking', 'Languages', 'Marketing', 'Business'];
 
 export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   visible,

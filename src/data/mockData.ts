@@ -22,6 +22,7 @@ export const DEFAULT_USER_STATS: UserPersonalStats = {
 export const POPULAR_HOBBIES: string[] = [
   'Music',
   'Coding',
+  'Spoken English',
   'Design',
   'Photography',
   'Fitness',

@@ -8,6 +8,7 @@ import { CallModal } from './src/components/common/CallModal';
 import { NotificationRouter } from './src/components/common/NotificationRouter';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import * as NativeSplash from 'expo-splash-screen';
+import { UpdatePrompt } from './src/components/common/UpdatePrompt';
 
 // Keep the native logo splash up until the animated splash takes over.
 void NativeSplash.preventAutoHideAsync().catch(() => undefined);
@@ -25,6 +26,8 @@ export default function App() {
           <CallModal />
           {/* Opens what a notification is about (push taps + bell taps) */}
           <NotificationRouter />
+          {/* "Update available" popup for over-the-air app updates */}
+          <UpdatePrompt />
         </CallProvider>
       </AppProvider>
       </KeyboardProvider>

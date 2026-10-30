@@ -65,6 +65,22 @@ function run(bin: string, args: string[], timeoutMs: number): Promise<Buffer> {
   });
 }
 
+/** A 2-second tone as MP3 (for the admin "test connection" listening check). */
+export async function testToneMp3(): Promise<AiMedia | null> {
+  const bin = ffmpegPath();
+  if (!bin) return null;
+  try {
+    const data = await run(
+      bin,
+      ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ac', '1', '-ar', '16000', '-b:a', '32k', '-f', 'mp3', 'pipe:1'],
+      20_000,
+    );
+    return data.length > 500 ? { mime: 'audio/mp3', data } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Read one of OUR uploads (disk in development, CDN in production). */
 export async function loadUpload(url: string): Promise<Buffer> {
   if (!isOwnUpload(url)) throw new MediaError('Not a LERNEX upload');

@@ -3,6 +3,14 @@
     "name": "LERNEX",
     "slug": "lernex-app",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/d5035170-512e-4117-9250-e932263ec707",
+      "checkAutomatically": "NEVER",
+      "fallbackToCacheTimeout": 0
+    },
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "icon": "./assets/icon.png",

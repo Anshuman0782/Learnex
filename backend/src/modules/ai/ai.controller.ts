@@ -12,7 +12,7 @@ import { MentorTestService } from './mentor-test.service.js';
 import { AiRouterService } from './ai-router.service.js';
 import { AiQueueService } from './ai-queue.service.js';
 import { AI_SKILL_IDS } from './ai-skills.js';
-import { ffmpegPath } from './analysis/media-prep.js';
+import { ffmpegPath, testToneMp3 } from './analysis/media-prep.js';
 
 class StartTestDto {
   @IsString()
@@ -155,8 +155,8 @@ export class AiAdminController {
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   @Post('test')
-  test() {
-    return this.router.ping();
+  async test() {
+    return this.router.ping(await testToneMp3());
   }
 
   @Patch('skills/:skill')

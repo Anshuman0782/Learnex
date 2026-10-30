@@ -14,11 +14,18 @@ import { Platform } from 'react-native';
  */
 const API_PORT = 3000;
 const API_PREFIX = '/api/v1';
+/** The live backend (used by release builds and app updates). */
+const PRODUCTION_API = 'https://lernex-api.onrender.com';
 
 function resolveHost(): string {
   const explicit = process.env.EXPO_PUBLIC_API_URL;
   if (explicit) {
     return explicit.replace(/\/+$/, '');
+  }
+
+  // Release builds and over-the-air updates always use the live server.
+  if (!__DEV__) {
+    return PRODUCTION_API;
   }
 
   // e.g. "192.168.1.5:8081" (Expo dev server host).

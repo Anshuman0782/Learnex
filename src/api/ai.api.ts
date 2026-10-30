@@ -119,6 +119,8 @@ export interface AiProviderStatus {
   dailyLimit: number | null;
   coolingUntil: string | null;
   lastError: string | null;
+  lastOkAt?: string | null;
+  lastOkMs?: number | null;
 }
 
 export interface AiAdminStatus {
@@ -135,6 +137,8 @@ export interface AdminMentorTestRow extends MentorApplication {
 }
 
 export interface AdminMentorTestDetail extends AdminMentorTestRow {
+  /** While the AI is still judging (status SUBMITTED). */
+  judging?: { state: string; attempts: number; nextTryAt: string | null; lastError: string | null } | null;
   task: any;
   recordingUrl: string | null;
   codeAnswer: string | null;
@@ -144,7 +148,7 @@ export interface AdminMentorTestDetail extends AdminMentorTestRow {
 
 export const getAiAdminStatusRequest = () => apiRequest<AiAdminStatus>('/admin/ai/status');
 export const testAiProvidersRequest = () =>
-  apiRequest<{ name: string; ok: boolean; ms: number; error?: string }[]>('/admin/ai/test', { method: 'POST' });
+  apiRequest<{ name: string; label?: string; ok: boolean; ms: number; error?: string }[]>('/admin/ai/test', { method: 'POST' });
 export const setAiSkillRequest = (skill: AiSkillId, body: { progressEnabled?: boolean; mentorTestEnabled?: boolean }) =>
   apiRequest<AiAdminStatus['skills']>(`/admin/ai/skills/${skill}`, { method: 'PATCH', body });
 export const getAdminMentorTestsRequest = (status?: string) =>
